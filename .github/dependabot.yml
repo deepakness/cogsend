@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine bumps instead of fifteen.
+      dev-dependencies:
+        dependency-type: development
+      production-dependencies:
+        dependency-type: production
+    ignore:
+      # SvelteKit pins `typescript@^5.3.3 || ^6.0.0`, so a TypeScript major
+      # cannot install and takes the whole dev-dependencies group down with it
+      # (npm ci fails on the peer conflict before any test runs). Take that one
+      # by hand when SvelteKit widens the range.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

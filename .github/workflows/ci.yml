@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Least privilege: CI only reads the repo.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # Node 24 (npm 11) rather than 22 (npm 10): npm 10 still asks the
+          # retired /security/audits/quick endpoint for advisories, which now
+          # answers 400 "Invalid package tree" for any lockfile at all — so the
+          # audit below could never do its job there. npm 11 uses the supported
+          # bulk endpoint. Local development also runs Node 24.
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Dependency audit
+        # Fails on high/critical advisories; low-severity ones that only reach
+        # dev tooling (and have no upstream fix) stay below the threshold.
+        #
+        # A registry outage is not a finding: npm reports it as an error
+        # document instead of advisory data, which otherwise turns every push
+        # red while npm is down. That warns and passes; anything carrying
+        # advisory data still fails.
+        run: |
+          set +e
+          report=$(npm audit --json 2>/dev/null)
+          set -e
+          verdict=$(printf '%s' "$report" | node -e '
+            let raw = "";
+            process.stdin.on("data", (chunk) => (raw += chunk)).on("end", () => {
+              let data = null;
+              try {
+                data = JSON.parse(raw || "{}");
+              } catch {
+                console.log("unavailable:unparsable audit output");
+                return;
+              }
+              const counts = data.metadata?.vulnerabilities;
+              if (!counts) {
+                const reason =
+                  data.message ?? data.error?.summary ?? data.error?.code ?? "no advisory data";
+                console.log("unavailable:" + String(reason).split("\n")[0].slice(0, 160));
+                return;
+              }
+              const high = (counts.high ?? 0) + (counts.critical ?? 0);
+              console.log(high > 0 ? `vulnerable:${high}` : "clean");
+            });
+          ')
+          case "$verdict" in
+            clean)
+              echo "No high or critical advisories."
+              ;;
+            unavailable:*)
+              echo "::warning::npm audit could not run (${verdict#unavailable:}); skipping"
+              printf '%s' "$report" | head -c 400
+              echo
+              ;;
+            *)
+              npm audit --audit-level=high || true
+              echo "::error::${verdict#vulnerable:} high or critical advisories"
+              exit 1
+              ;;
+          esac
+
+      - run: npm test
+      - run: npm run check
+      - run: npm run lint
+      - run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # Same runtime the check job uses (and local development), so the
+          # Playwright suite exercises the version that ships.
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+      # Seeds .dev.vars from tests/e2e/fixtures/dev.vars when missing, then runs
+      # against a dedicated local D1/R2 state dir (`.wrangler/e2e-state`).
+      # `wrangler dev` serves the built Worker locally, so no Cloudflare
+      # credentials are involved.
+      - run: npm run test:e2e
+      # The suite runs with SKIP_TOTP so specs can sign in with a password; this
+      # one run removes it, because enrolling an authenticator is the flow a new
+      # instance cannot skip. It restores .dev.vars afterwards.
+      - run: npm run test:e2e:totp
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-artifacts
+          path: test-results/
+          retention-days: 7

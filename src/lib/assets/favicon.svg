@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+	<title>CogSend favicon</title>
+	<rect width="64" height="64" rx="15" fill="#0c0c0e" />
+	<path d="M24.82 12.27L39.18 12.27L39.95 19.28A15 15 0 0 1 44.72 24.05L51.73 24.82L51.73 39.18L44.72 39.95A15 15 0 0 1 39.95 44.72L39.18 51.73L24.82 51.73L24.05 44.72A15 15 0 0 1 19.28 39.95L12.27 39.18L12.27 24.82L19.28 24.05A15 15 0 0 1 24.05 19.28Z M32 32m-8 0a8 8 0 1 0 16 0a8 8 0 1 0 -16 0" fill="#ffffff" fill-rule="evenodd" />
+</svg>

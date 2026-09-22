@@ -1,0 +1,66 @@
+# Copy to .dev.vars for local `npm run dev`
+#
+# Required, and the only secret a deployment has to bring. Generate one with
+# `openssl rand -hex 32` — it encrypts the provider tokens stored in D1, and
+# AUTH_SECRET and SCHEDULER_SECRET are derived from it (see below). It cannot be
+# generated at deploy time: a copy stored next to the data it protects would
+# make a database leak a full takeover. `npm run setup` generates it for you when
+# it is empty.
+# Example (never deploy it): deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+APP_ENCRYPTION_KEY=
+
+# Optional. A deployment cannot know its own URL before it exists, so the app
+# uses the origin of the request it is serving; set this only to pin a custom
+# domain or a deliberate public origin. Local dev needs nothing here — the
+# derived origin is http://localhost:5173. Opening a dev server from another
+# device (a LAN address) does not count as local: generate real keys for that.
+# APP_URL=http://localhost:5173
+
+# Optional. The instance name is set in the app (Settings → Instance) and falls
+# back to "CogSend"; the var still works for config-file deployments.
+# APP_NAME=CogSend
+
+# The login is not configured here. `npm run setup` creates the single account in
+# D1 (only a PBKDF2 hash is stored) and it is changed in Settings → Login or
+# replaced with `npm run admin:reset`. For local development a row for this
+# database comes from `npm run db:seed:local`, and the TOTP prompt is skipped
+# with SKIP_TOTP below.
+
+# Both derived from APP_ENCRYPTION_KEY when unset, so leave them empty unless
+# you want them independent. AUTH_SECRET signs sessions (changing it signs
+# everyone out); SCHEDULER_SECRET is the tick bearer, needed here only when
+# something outside the Worker — an external pinger — has to hold it.
+# AUTH_SECRET=
+# SCHEDULER_SECRET=
+
+# Optional. Scripts send: Authorization: Bearer $API_TOKEN (min 16 chars)
+# API_TOKEN=
+# Optional. Enables the LinkedIn / Threads / X connect buttons (OAuth apps).
+# LINKEDIN_CLIENT_ID=
+# LINKEDIN_CLIENT_SECRET=
+# THREADS_APP_ID=
+# THREADS_APP_SECRET=
+# X_CLIENT_ID=
+# X_CLIENT_SECRET=
+# Optional. Local dev only: skip the 2FA enrollment/verify flow. Honored only
+# when the instance resolves to a localhost URL — never on a real host.
+# Set to 1 to enable.
+# SKIP_TOTP=1
+# Optional. Enables video uploads (LinkedIn only: one MP4 per post, no images
+# mixed in). The upload path is wired but has not been verified end to end
+# against LinkedIn's live API, so it is off unless you set this. The file
+# picker hides video while it is off, and the API refuses video files.
+# ENABLE_VIDEO_UPLOAD=1
+
+# Optional. Failure digest via Resend: the API key plus the address that
+# should receive it. Unset means failures only show in the app.
+# RESEND_API_KEY=
+# NOTIFY_EMAIL=
+# NOTIFY_FROM=CogSend <onboarding@resend.dev>
+# Optional. Public media origin for Meta's crawler (for example an R2 custom
+# domain with Cloudflare cache). When set, Threads gets direct object URLs
+# instead of the signed Worker route. Must be https and serve the bucket keys.
+# This trades the signature for speed: those URLs never expire and rely only on
+# the randomness in the object key, so keep the origin unlisted and treat a
+# leaked URL as permanent. Unset it to go back to short-lived signed URLs.
+# MEDIA_PUBLIC_BASE_URL=https://media.example.com

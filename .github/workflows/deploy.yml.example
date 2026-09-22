@@ -1,0 +1,87 @@
+# Deploy on push, without Workers Builds.
+#
+# Rename this file to `deploy.yml` to enable it, then add two repository
+# secrets under Settings → Secrets and variables → Actions:
+#
+#   CLOUDFLARE_API_TOKEN   Workers Scripts: Edit, D1: Edit, Workers R2 Storage: Edit
+#   CLOUDFLARE_ACCOUNT_ID  the account id from the Cloudflare dashboard URL
+#
+# The job skips itself when those secrets are missing, so forks stay quiet.
+# Everything runs through the repository's own npm scripts, which is what keeps
+# this path identical to a local `npm run deploy:release`: the same config
+# handling, and the same tolerance for an account whose cron-trigger slots are
+# all used (see docs/deploy.md → the 10072 entry).
+#
+# This is an update path, not an install path: run `npm run setup` once locally
+# first. It creates the D1 database, the R2 bucket and the account, and it is
+# the only thing that can — nothing at runtime creates an account, which is what
+# keeps a fresh deployment from being claimable. From then on this workflow is
+# self-sufficient.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check configuration
+        id: config
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::notice::No CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID — skipping deploy."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.config.outputs.ready == 'true'
+      - uses: actions/setup-node@v7
+        if: steps.config.outputs.ready == 'true'
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+        if: steps.config.outputs.ready == 'true'
+
+      # wrangler reads CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID from the
+      # environment, so no wrapper action is needed.
+      - name: Build and deploy
+        if: steps.config.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm run build
+          npm run deploy
+
+      # After the deploy, so a first run cannot fail for a database that does
+      # not exist yet: the deploy provisions it, and the app repairs missing
+      # tables and columns on the first request anyway. This records the schema
+      # so the next release knows what has been applied.
+      - name: Apply D1 migrations
+        if: steps.config.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run db:migrate:remote
+
+      # Secrets are not touched here on purpose: `npm run secrets:put` (or the
+      # dashboard) keeps owning APP_ENCRYPTION_KEY, so a deploy can never
+      # rotate the key that encrypts every stored credential.

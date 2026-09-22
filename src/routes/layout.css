@@ -1,0 +1,114 @@
+@import 'tailwindcss';
+
+/* Light-only stone theme. New UI uses Tailwind stone classes directly; the
+vars below are the few that components still share. */
+
+:root {
+	color-scheme: light;
+	--fg: #0c0c0e;
+	--muted: #6b7280;
+	--border: #e8e8ec;
+	--card: #ffffff;
+	--sel-bg: #b9d9ff;
+	--sel-fg: #0c0c0e;
+}
+
+html,
+body {
+	height: 100%;
+}
+
+body {
+	color: var(--fg);
+	background: #fafaf9;
+	font-family:
+		ui-sans-serif,
+		system-ui,
+		-apple-system,
+		BlinkMacSystemFont,
+		'Segoe UI',
+		Roboto,
+		'Helvetica Neue',
+		Arial,
+		sans-serif;
+	-webkit-font-smoothing: antialiased;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+::selection {
+	background: var(--sel-bg);
+	color: var(--sel-fg);
+}
+
+/* Keyboard cursors */
+button:not(:disabled),
+a,
+select,
+summary,
+[role='button'],
+[role='tab'],
+label:has(> input[type='checkbox']),
+label:has(> input[type='radio']) {
+	cursor: pointer;
+}
+button:disabled {
+	cursor: default;
+}
+
+@layer base {
+	/* Keyboard users get a ring on discrete controls (buttons, links, tabs).
+	RULES MUST STAY LAYERED: Tailwind v4 puts utilities in @layer utilities,
+	and bare (unlayered) author CSS beats ALL layered styles regardless of
+	specificity. An unlayered ring here overrode every focus:outline-none
+	utility and painted a black box around focused textareas/text inputs.
+	Inside @layer base, component focus: utilities correctly win. */
+	:focus {
+		outline: none;
+	}
+	:focus-visible {
+		outline: 2px solid var(--fg);
+		outline-offset: 2px;
+	}
+	/* Text-entry fields never take the global ring: they carry their own
+	focus affordance by convention (border/bg shift on the field or its
+	wrapper), and browsers match :focus-visible on text inputs even for
+	mouse focus. This guards future fields that forget focus:outline-none. */
+	textarea:focus-visible,
+	input:is(
+			[type='text'],
+			[type='search'],
+			[type='url'],
+			[type='email'],
+			[type='password'],
+			[type='number'],
+			[type='date'],
+			[type='time'],
+			[type='datetime-local'],
+			[type='month'],
+			[type='week'],
+			[type='tel']
+		):focus-visible,
+	input:not([type]):focus-visible {
+		outline-style: none;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		*,
+		*::before,
+		*::after {
+			animation-duration: 0.01ms !important;
+			transition-duration: 0.01ms !important;
+		}
+	}
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: 4px;
+}

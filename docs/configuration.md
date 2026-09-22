@@ -1,0 +1,56 @@
+# Configuration
+
+Everything here is optional except `APP_ENCRYPTION_KEY`: an instance works out
+of the box with one secret. These pages cover the settings you may want to pin
+down once it is running.
+
+## Secrets
+
+`APP_ENCRYPTION_KEY` is the only secret a deployment has to bring. It encrypts the provider tokens and TOTP secret stored in D1, so it cannot be generated at runtime and stored there — and because rotating it means reconnecting every account, there is no "set a temporary one now, change it later" either. Generate it once with `openssl rand -hex 32`.
+
+`AUTH_SECRET` (signs sessions and OAuth state) and `SCHEDULER_SECRET` (the tick bearer) are derived from it with HMAC-SHA256, so there is nothing else to invent or keep in sync. Set either one explicitly to override the derivation, and delete it to go back. Changing `AUTH_SECRET` signs everybody out. You need `SCHEDULER_SECRET` only when something outside the Worker has to hold the tick bearer. For a new external pinger the token from **Settings → Scheduled publishing** is the better choice: no redeploy, and it cannot reach anything except the tick. Set `SCHEDULER_SECRET` when something already holds it — a pinger you set up earlier, or a script (see [Scheduling](scheduling.md)).
+
+The other optional secrets are `API_TOKEN` (scripts), the OAuth client ids and secrets, `RESEND_API_KEY`/`NOTIFY_EMAIL` for failure mail, and `MEDIA_PUBLIC_BASE_URL` for Meta's crawler. That last one is a trade-off: it serves media from a public origin with no signature and no expiry, protected only by the randomness in the object key. Keep the origin unlisted and treat a leaked URL as permanent; leave the variable unset to keep the short-lived signed route.
+
+The login is not one of these secrets. `npm run setup` writes the account into D1 — see [The login](#the-login) below.
+
+## Naming your instance
+
+The instance name — shown in the page title, the header, and the login screen — is set in **Settings → Instance** and stored in D1, so it needs no redeploy. `APP_NAME` (a plain `[vars]` entry, default `CogSend`) is the fallback for deployments that would rather keep it in config. The outbound `User-Agent`, the Mastodon app name, cookies, and API-key prefixes stay fixed so upgrades keep working.
+
+`APP_URL` is the instance's public origin; `npm run setup` stores it as a Worker secret, and a `[vars]` entry is read the same way. It is optional: left unset, the app uses the origin each request arrives on and remembers the first authenticated one, which is how a deployment works without knowing its URL in advance. Set it to pin a deliberate origin — a custom domain, or the hostname OAuth redirect URIs and signed media URLs must use. A pinned value does not follow a hostname change, so update it if you move.
+
+## Keeping your own deployment separate from upstream
+
+If you run your own instance while pulling updates from this repo, keep your instance-specific values in `wrangler.personal.jsonc` (gitignored) instead of editing `wrangler.jsonc`. Copy the committed file and change `name`, `database_id`, `database_name`, and `bucket_name`.
+
+Every npm script goes through `scripts/wrangler.mjs`, which passes `--config wrangler.personal.jsonc` automatically when that file exists, plus `--profile <name>` when `WRANGLER_PROFILE` is set:
+
+```sh
+WRANGLER_PROFILE=my-account npm run deploy
+```
+
+Because your changes live in files upstream never touches, `git pull upstream main` stays conflict-free.
+
+## The login
+
+There is one account, and one way to create it: `npm run setup` writes it into D1
+from the terminal, before the deployment answers its first request. Only a
+PBKDF2-SHA256 hash is stored, the password never becomes a Worker secret, and
+because the row exists from the start there is nothing for anyone else to claim —
+the app has no route that can create an account.
+
+**Settings → Login** changes the email or the password. The current password is
+required, and a new password signs every device out.
+
+Forgot the password? `npm run admin:reset` from your checkout writes a new one and
+revokes every session, leaving the account, its drafts, connections and keys
+untouched. Add `--all` when the authenticator is gone too: that clears the
+enrolled device, and the next sign-in walks through enrollment again with a fresh
+QR and fresh backup codes. `npm run setup -- --reset-login` does the same thing as
+the default case while it is re-checking the resources.
+
+There is no emailed reset link and no reset route in the app. Recovery needs the
+same thing installing needs: your Cloudflare account, which is also where the
+database and the secrets live. That keeps the trust boundary honest and leaves
+nothing for anyone to phish.

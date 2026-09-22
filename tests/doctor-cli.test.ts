@@ -1,0 +1,98 @@
+import { spawnSync } from 'node:child_process';
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+
+/**
+ * The rest of tests/doctor.test.ts pins doctor's judgements as pure functions;
+ * this runs the script itself.
+ *
+ * It exists because of what that cannot see: the platform line is one
+ * `checks.push(...)` in the CLI, so dropping it (in a refactor, say) left every
+ * unit test green while `npm run doctor` silently stopped mentioning the three
+ * platforms that need an app registered at the provider. The scratch checkout
+ * replaces `scripts/wrangler.mjs` with canned answers, which is the only thing
+ * the CLI talks to.
+ */
+const dirs: string[] = [];
+afterEach(() => {
+	while (dirs.length) rmSync(dirs.pop() as string, { recursive: true, force: true });
+});
+
+function scratchCheckout(secretNames: string[]) {
+	const dir = mkdtempSync(join(tmpdir(), 'cogsend-doctor-'));
+	dirs.push(dir);
+	cpSync('scripts', join(dir, 'scripts'), { recursive: true });
+	writeFileSync(
+		join(dir, 'wrangler.jsonc'),
+		JSON.stringify({
+			name: 'cogsend',
+			d1_databases: [{ binding: 'DB', database_name: 'cogsend', database_id: 'db-1' }],
+			r2_buckets: [{ binding: 'MEDIA', bucket_name: 'cogsend-media' }],
+			triggers: { crons: ['* * * * *'] }
+		})
+	);
+	writeFileSync(
+		join(dir, 'scripts', 'wrangler.mjs'),
+		`const args = process.argv.slice(2);
+const out = (value) => process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value));
+if (args[0] === 'whoami') out({ loggedIn: true, email: 'op@example.com', accounts: [{ name: 'Acct' }] });
+else if (args[0] === 'd1' && args[1] === 'list') out([{ uuid: 'db-1', name: 'cogsend' }]);
+else if (args[0] === 'r2') out('cogsend-media');
+else if (args[0] === 'secret') out(${JSON.stringify(secretNames.map((name) => ({ name })))});
+else if (args[0] === 'd1' && args[1] === 'migrations') out('✅ No migrations to apply!');
+else if (args[0] === 'deployments') out('Deployed\\n  Created: 1 minute ago');
+else out('');
+`
+	);
+	return dir;
+}
+
+function runDoctor(dir: string) {
+	const result = spawnSync(process.execPath, ['scripts/doctor.mjs'], {
+		cwd: dir,
+		encoding: 'utf8',
+		env: { ...process.env, NO_COLOR: '1' }
+	});
+	return `${result.stdout}${result.stderr}`;
+}
+
+describe('doctor CLI', () => {
+	it('reports the optional platforms, and that nothing is broken without them', () => {
+		const output = runDoctor(scratchCheckout(['APP_ENCRYPTION_KEY', 'SCHEDULER_SECRET']));
+		expect(output).toContain('LinkedIn, Threads, X: no app credentials (optional)');
+		expect(output).toContain('Mastodon and Bluesky can be connected');
+		// Exit 0: a deployment without app credentials is complete.
+		expect(output).not.toMatch(/✗/);
+	});
+
+	it('reports the platforms that do have credentials', () => {
+		const output = runDoctor(
+			scratchCheckout([
+				'APP_ENCRYPTION_KEY',
+				'SCHEDULER_SECRET',
+				'LINKEDIN_CLIENT_ID',
+				'LINKEDIN_CLIENT_SECRET'
+			])
+		);
+		expect(output).toContain('Threads, X: no app credentials (optional)');
+		expect(output).toContain('LinkedIn can be connected');
+	});
+
+	it('reports all five platforms once every credential is set', () => {
+		const output = runDoctor(
+			scratchCheckout([
+				'APP_ENCRYPTION_KEY',
+				'SCHEDULER_SECRET',
+				'LINKEDIN_CLIENT_ID',
+				'LINKEDIN_CLIENT_SECRET',
+				'THREADS_APP_ID',
+				'THREADS_APP_SECRET',
+				'X_CLIENT_ID'
+			])
+		);
+		expect(output).toContain('LinkedIn, Threads and X have app credentials');
+		expect(output).toContain('all five platforms can be connected');
+	});
+});

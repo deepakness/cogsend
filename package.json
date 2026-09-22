@@ -1,0 +1,91 @@
+{
+	"name": "cogsend",
+	"private": true,
+	"version": "1.1.0",
+	"description": "Minimal social scheduler for Mastodon, Bluesky, LinkedIn, Threads, and X. SvelteKit on Cloudflare Workers, D1, and R2.",
+	"license": "MIT",
+	"author": "DeepakNess <me@deepakness.com> (https://github.com/deepakness)",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/deepakness/cogsend.git"
+	},
+	"homepage": "https://github.com/deepakness/cogsend#readme",
+	"bugs": {
+		"url": "https://github.com/deepakness/cogsend/issues"
+	},
+	"keywords": [
+		"social-media",
+		"scheduler",
+		"mastodon",
+		"bluesky",
+		"linkedin",
+		"threads",
+		"sveltekit",
+		"cloudflare-workers"
+	],
+	"type": "module",
+	"engines": {
+		"node": ">=22.12.0"
+	},
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build && node scripts/wrap-worker.mjs",
+		"preview": "node scripts/wrangler.mjs dev .svelte-kit/cloudflare/_worker.js --port 4173",
+		"prepare": "svelte-kit sync || echo ''",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"lint": "prettier --check . && eslint .",
+		"format": "prettier --write .",
+		"test:unit": "vitest",
+		"test": "vitest run",
+		"test:e2e": "node scripts/e2e-prepare.mjs && playwright test",
+		"test:e2e:totp": "node scripts/e2e-totp.mjs",
+		"setup": "node scripts/setup.mjs",
+		"admin:reset": "node scripts/admin-reset.mjs",
+		"deploy": "node scripts/wrangler.mjs deploy",
+		"deploy:release": "node scripts/deploy.mjs",
+		"secrets:put": "node scripts/put-secrets.mjs",
+		"db:migrate:local": "node scripts/migrate-remote.mjs --local",
+		"db:seed:local": "node scripts/seed-local.mjs",
+		"db:migrate:remote": "node scripts/migrate-remote.mjs",
+		"doctor": "node scripts/doctor.mjs"
+	},
+	"devDependencies": {
+		"@eslint/js": "^10.0.1",
+		"@libsql/client": "^0.18.0",
+		"@playwright/test": "^1.63.0",
+		"@sveltejs/adapter-cloudflare": "^7.2.8",
+		"@sveltejs/kit": "^2.70.3",
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"@tailwindcss/vite": "^4.3.0",
+		"@types/node": "^26",
+		"eslint": "^10.10.0",
+		"eslint-config-prettier": "^10.1.8",
+		"eslint-plugin-svelte": "^3.19.0",
+		"globals": "^17.12.0",
+		"prettier": "^3.8.3",
+		"prettier-plugin-svelte": "^4.1.0",
+		"prettier-plugin-tailwindcss": "^0.8.0",
+		"svelte": "^5.57.0",
+		"svelte-check": "^4.6.0",
+		"tailwindcss": "^4.3.0",
+		"typescript": "^6.0.3",
+		"typescript-eslint": "^8.70.0",
+		"vite": "^8.3.0",
+		"vitest": "^5.0.0",
+		"wrangler": "^4.131.2"
+	},
+	"dependencies": {
+		"@lucide/svelte": "^1.45.0",
+		"date-fns": "^4.4.0",
+		"drizzle-orm": "^0.45.2",
+		"uqr": "^0.1.3",
+		"zod": "^4.6.2"
+	},
+	"allowScripts": {
+		"esbuild@0.28.1": true,
+		"fsevents@2.3.2": true,
+		"fsevents@2.3.3": true,
+		"workerd@1.20260911.1": true
+	}
+}

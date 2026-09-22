@@ -1,0 +1,52 @@
+name: Scheduler tick
+# Optional backup tick. Scheduled posts are published by the Worker's own cron
+# trigger, which ships enabled (see wrangler.jsonc). This workflow is for
+# deployments that would rather not use a trigger — or that cannot, because the
+# account has no cron-trigger slot left. It skips itself when the APP_URL and
+# SCHEDULER_SECRET repository secrets are not set; the tick token from
+# Settings → Scheduled publishing works as the SCHEDULER_SECRET value here.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduler-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish due posts
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          SCHEDULER_SECRET: ${{ secrets.SCHEDULER_SECRET }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Scheduler-only secret preferred (it cannot publish via the API);
+          # API_TOKEN kept as a fallback for existing setups.
+          TICK_TOKEN="${SCHEDULER_SECRET:-${API_TOKEN:-}}"
+          if [ -z "${APP_URL:-}" ] || [ -z "${TICK_TOKEN:-}" ]; then
+            # Forks inherit this workflow but have no secrets. Skip rather than
+            # fail every scheduled run; set APP_URL + SCHEDULER_SECRET to enable.
+            echo "::notice::No APP_URL / SCHEDULER_SECRET configured — skipping tick."
+            exit 0
+          fi
+          url="${APP_URL%/}/api/internal/tick"
+          code=$(curl -sS -o /tmp/tick-body -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${TICK_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "$url")
+          if [ "$code" != "200" ]; then
+            echo "tick failed HTTP $code"
+            cat /tmp/tick-body
+            exit 1
+          fi
+          echo "tick ok"

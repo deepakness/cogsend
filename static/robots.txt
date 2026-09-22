@@ -1,0 +1,8 @@
+# Crawlers are welcome to index the app UI, but there is nothing useful behind
+# the login form and no reason to spend a request on the endpoints.
+User-agent: *
+Disallow: /login
+Disallow: /login/verify
+Disallow: /login/setup-2fa
+Disallow: /api/
+Allow: /api/media/public/

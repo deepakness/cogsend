@@ -1,0 +1,80 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "cogsend",
+	"compatibility_date": "2026-08-17",
+	"compatibility_flags": ["nodejs_als"],
+	"main": ".svelte-kit/cloudflare/_worker.js",
+	"assets": {
+		"binding": "ASSETS",
+		"directory": ".svelte-kit/cloudflare"
+	},
+	// This config is the generic one that ships with the repo. If you deploy a
+	// personal instance, put your own Worker name, D1 database_id and R2 bucket
+	// in `wrangler.personal.jsonc` (gitignored) and every npm script will pick
+	// it up automatically — see scripts/wrangler.mjs.
+	//
+	// A per-minute cron ships enabled. The Workers free plan allows five cron
+	// triggers per account and documents `* * * * *`; each scheduled run gets
+	// the plan's CPU budget — the same one an HTTP tick gets — so a tick that
+	// runs out of budget leaves the rest due and the next one picks them up.
+	//
+	// An account that has used all five still deploys: scripts/wrangler.mjs
+	// retries once with `"crons": []`, prints why, and exits 0. To tick from
+	// somewhere else instead (Settings → Scheduled publishing hands out a token
+	// for /api/internal/tick), set `"crons": []` here yourself.
+	"triggers": { "crons": ["* * * * *"] },
+	//
+	// Optional: binding a queue makes the tick hand publishes to a consumer
+	// instead of publishing inline (one publish per message, with retries).
+	// Add a "queues" block with a producer named PUBLISH_QUEUE and a consumer
+	// for the same queue; src/hooks.server.ts picks the binding up automatically.
+	"workers_dev": true,
+	"preview_urls": false,
+	// `redact_query_string` keeps callback `code`/`state` values and media
+	// `exp`/`sig` parameters out of Workers Logs; the invocation log otherwise
+	// records the full request URL.
+	"observability": { "enabled": true, "redact_query_string": true },
+	// Rate limiting for the two endpoints anybody can call: sign-in and the
+	// authenticator check. Enforced by Cloudflare at the edge (the same
+	// infrastructure as WAF rate-limiting rules), per location, so nothing in
+	// the Worker counts requests. Deliberately generous: twenty a minute is far
+	// more than a person needs and far less than guessing requires. The app's
+	// own lockout — eight failures per fifteen minutes, per account — stays what
+	// gates a determined attacker; this keeps the flood from reaching D1.
+	"ratelimits": [
+		{
+			"name": "AUTH_RATE_LIMITER",
+			"namespace_id": "1001",
+			"simple": { "limit": 20, "period": 60 }
+		}
+	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "cogsend",
+			// Empty on purpose: it tells Wrangler to create the database and bind
+			// it. Any value here — even a placeholder string — is read as "this
+			// database already exists", and provisioning is skipped. Your own
+			// deployment sets the real id in wrangler.personal.jsonc (npm run
+			// setup does that), or leaves it empty for Wrangler to create.
+			"database_id": "",
+			"migrations_dir": "drizzle"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "MEDIA",
+			// R2 bucket names are globally unique across all Cloudflare accounts,
+			// so this is a starting point rather than a promise: change it in
+			// `wrangler.personal.jsonc` if it is taken. Wrangler creates the
+			// bucket when it is missing.
+			"bucket_name": "cogsend-media"
+		}
+	],
+	// No vars: the instance name is set in the app (Settings → Instance) and
+	// falls back to "CogSend", and the scheduled handler runs whenever the
+	// trigger fires. Keys, passwords and OAuth client secrets belong in Worker
+	// secrets (`npm run secrets:put`), because a deploy overwrites vars with
+	// whatever this file says.
+	"vars": {}
+}

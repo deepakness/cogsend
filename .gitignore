@@ -1,0 +1,39 @@
+node_modules
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+# Agent workspace (todos, local state)
+.pi/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+.dev.vars
+.api-token
+
+# Local deployment overrides: your own Worker name, D1 database_id and R2
+# bucket. Picked up automatically by scripts/wrangler.mjs when present.
+wrangler.personal.jsonc
+wrangler.personal.json
+
+# Written for one deploy when Cloudflare refuses the cron trigger (the account
+# is at its trigger limit) and removed again right after. See scripts/wrangler.mjs.
+wrangler.no-cron.jsonc
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+# Playwright
+test-results
