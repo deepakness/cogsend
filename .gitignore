@@ -8,8 +8,11 @@ node_modules
 /.svelte-kit
 /build
 
-# Agent workspace (todos, local state)
-.pi/
+# Agent workspace (todos, local state). The Pi extension manifest under
+# .pi/extensions/ is shipped, everything else stays local.
+.pi/*
+!.pi/extensions/
+!.pi/extensions/**
 
 # OS
 .DS_Store

@@ -54,6 +54,9 @@
 - Disconnecting an account removes its scheduled posts, returns drafts that were still waiting, and keeps published history
 - Credentials encrypted at rest (AES-256-GCM), with 2FA on the single admin account
 - Personal API key for scripts and Shortcuts (`Settings → API access`)
+- Agent-ready: ships a SKILL.md plus plugin manifests so Claude Code, Codex,
+  Hermes, Pi, OpenCode and friends can draft, schedule and publish through the
+  API
 
 ## Install
 
@@ -98,6 +101,7 @@ release tags and rolling back.
 | [OAuth apps](docs/oauth-apps.md)       | LinkedIn, Threads and X app setup, and what each platform allows                                                    |
 | [Scheduling](docs/scheduling.md)       | the cron trigger, the free-plan trigger limit, external pingers, failure emails                                     |
 | [API](docs/api.md)                     | personal API keys and worked examples (the full reference is in-app at `/api`)                                      |
+| [AI agents](docs/agents.md)            | driving an instance from Claude Code, Codex, Hermes, Pi and other agents                                            |
 | [Cloudflare Access](docs/access.md)    | putting an extra gate in front of an instance                                                                       |
 | [Development](docs/development.md)     | local setup, the checks that must pass, code expectations                                                           |
 

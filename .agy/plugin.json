@@ -1,0 +1,18 @@
+{
+  "name": "cogsend",
+  "version": "1.0.0",
+  "description": "Draft, schedule and publish social posts on a self-hosted cogsend instance",
+  "author": "DeepakNess <me@deepakness.com>",
+  "repository": "https://github.com/deepakness/cogsend",
+  "license": "MIT",
+  "keywords": [
+    "social-media",
+    "scheduler",
+    "mastodon",
+    "bluesky",
+    "linkedin",
+    "threads",
+    "x",
+    "cloudflare-workers"
+  ]
+}
