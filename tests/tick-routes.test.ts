@@ -3,6 +3,7 @@ import { newId, type AppDb } from '$lib/server/db/client';
 import { users } from '$lib/server/db/schema';
 import { createTestDb, createTestMedia, TEST_ENV } from '$lib/server/db/test';
 import { schedulerHealth } from '$lib/server/scheduler';
+import { rotateTickToken } from '$lib/server/tick-token';
 import {
 	DELETE as tickTokenDELETE,
 	GET as tickTokenGET,
@@ -142,5 +143,36 @@ describe('tick token routes', () => {
 		// This instance has ticked, so "on time" still wins over the stale note.
 		expect(body.message).toBe('Scheduled publishing is on time');
 		await writeAppSetting(db, CRON_STATE_SETTING, '');
+	});
+
+	it('accepts the Settings tick token at the route itself', async () => {
+		// The hook admits the Settings token for /api/internal/tick; the route
+		// must accept the same credential, or the documented external-pinger
+		// path (Settings token) 401s after passing the hook.
+		const { POST: internalTickPOST } = await import('../src/routes/api/internal/tick/+server');
+		const { token } = await rotateTickToken(db);
+		const locals = session();
+		const res = (await internalTickPOST({
+			request: new Request('https://x.test/api/internal/tick', {
+				method: 'POST',
+				headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+			}),
+			locals
+		} as never)) as Response;
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { processed: number };
+		expect(typeof body.processed).toBe('number');
+	});
+
+	it('still refuses the tick route without any credential', async () => {
+		const { POST: internalTickPOST } = await import('../src/routes/api/internal/tick/+server');
+		const res = (await internalTickPOST({
+			request: new Request('https://x.test/api/internal/tick', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' }
+			}),
+			locals: session()
+		} as never)) as Response;
+		expect(res.status).toBe(401);
 	});
 });

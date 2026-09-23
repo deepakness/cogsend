@@ -2,6 +2,8 @@ import { hasApiScope, type ApiScope } from '$lib/domain/api-scopes';
 import { anySecretMatches, extractBearerToken } from '$lib/domain/bearer';
 import { isFullyVerified, type SessionUser } from './auth';
 import { unauthorized } from './http';
+import { verifyTickToken } from './tick-token';
+import type { AppDb } from './db/client';
 
 export function requireUser(user: SessionUser | null): SessionUser {
 	if (!isFullyVerified(user)) unauthorized();
@@ -34,11 +36,25 @@ export function assertScheduler(
 }
 
 /**
- * API-key scope gate. Sessions and the env API_TOKEN operator key carry
- * apiKeyScopes === null and bypass it. A scoped key must include the route's
- * scope (`write` implies `read`). Call AFTER requireUser/requireSession so
- * unauthenticated callers still get 401, not 403.
+ * The tick route admits one credential beyond assertScheduler's two: the
+ * Settings-minted tick token. The hook already scopes it to
+ * /api/internal/tick (never /api/internal/publish), and the docs hand this
+ * token to external pingers (cron-job.org, UptimeRobot) — so refusing it
+ * here would 401 the documented path one layer after the hook approved it.
+ * Same wire contract as the hook's check: SCHEDULER_SECRET and API_TOKEN
+ * still work, AUTH_SECRET never does.
  */
+export async function assertSchedulerOrTickToken(
+	request: Request,
+	env: { AUTH_SECRET: string; SCHEDULER_SECRET?: string; API_TOKEN?: string },
+	db: AppDb
+) {
+	const token = extractBearerToken(request.headers);
+	if (anySecretMatches(token, [env.SCHEDULER_SECRET, env.API_TOKEN])) return;
+	if (await verifyTickToken(db, token)) return;
+	unauthorized();
+}
+
 export function requireScope(locals: { apiKeyScopes?: string[] | null }, scope: ApiScope): void {
 	const scopes = locals.apiKeyScopes;
 	if (!scopes) return;
