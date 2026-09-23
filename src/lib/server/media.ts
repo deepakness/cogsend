@@ -166,9 +166,32 @@ export async function serveMediaBytes(
 		});
 	}
 	const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
-	const start = m?.[1] ? Number(m[1]) : 0;
-	const end = m?.[2] ? Number(m[2]) : total - 1;
-	if (!m || !Number.isInteger(start) || !Number.isInteger(end) || start > end || start >= total) {
+	if (!m) {
+		return new Response('Range unsatisfiable', {
+			status: 416,
+			headers: { ...baseHeaders, 'Content-Range': `bytes */${total}` }
+		});
+	}
+	// RFC 7233: `bytes=-N` is a suffix range — the LAST N bytes — not a
+	// prefix. Video players probe the tail of an mp4 (moov atom) this way;
+	// reading it as 0-N hands them the wrong bytes. Suffix 0 is unsatisfiable.
+	let start: number;
+	let end: number;
+	if (!m[1] && m[2]) {
+		const n = Number(m[2]);
+		if (!Number.isInteger(n) || n < 1) {
+			return new Response('Range unsatisfiable', {
+				status: 416,
+				headers: { ...baseHeaders, 'Content-Range': `bytes */${total}` }
+			});
+		}
+		start = Math.max(0, total - n);
+		end = total - 1;
+	} else {
+		start = m[1] ? Number(m[1]) : 0;
+		end = m[2] ? Number(m[2]) : total - 1;
+	}
+	if (!Number.isInteger(start) || !Number.isInteger(end) || start > end || start >= total) {
 		return new Response('Range unsatisfiable', {
 			status: 416,
 			headers: { ...baseHeaders, 'Content-Range': `bytes */${total}` }

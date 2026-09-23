@@ -137,5 +137,15 @@ describe('media serve hardening', () => {
 			{ mime: 'image/png', cacheControl: 'private, max-age=60' }
 		);
 		expect(bad.status).toBe(416);
+		// RFC 7233 suffix range: bytes=-3 means the LAST 3 bytes.
+		const suffix = await serveMediaBytes(
+			store,
+			'k',
+			new Request('https://x.test/', { headers: { Range: 'bytes=-3' } }),
+			{ mime: 'image/png', cacheControl: 'private, max-age=60' }
+		);
+		expect(suffix.status).toBe(206);
+		expect(suffix.headers.get('Content-Range')).toBe('bytes 7-9/10');
+		expect(new Uint8Array(await suffix.arrayBuffer())).toEqual(new Uint8Array([7, 8, 9]));
 	});
 });
