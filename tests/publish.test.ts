@@ -1471,6 +1471,63 @@ describe('publish auth classification', () => {
 			expect(row.status).toBe('expired');
 		});
 
+		it('a resume that finds Zernio failed lets the next attempt create a fresh post', async () => {
+			const conn = await zernioConnection();
+			const targetId = await target(conn);
+			// What a poll timeout leaves behind: an attempt whose checkpoint names
+			// the Zernio post, so the next attempt resumes by polling it.
+			await db.insert(publishAttempts).values({
+				id: newId(),
+				publishTargetId: targetId,
+				startedAt: new Date(Date.now() - 60_000),
+				finishedAt: new Date(Date.now() - 30_000),
+				success: false,
+				error: 'Zernio is still publishing this post',
+				responseSummary: JSON.stringify({ segmentIds: ['post-dead'], remoteUrl: null })
+			});
+			const creates: Request[] = [];
+			const dead = mockFetch({
+				'/v1/posts/post-dead': () =>
+					Response.json({
+						post: {
+							_id: 'post-dead',
+							platforms: [
+								{
+									platform: 'twitter',
+									accountId: 'acc-1',
+									status: 'failed',
+									errorCategory: 'platform_error',
+									errorMessage: 'X is down'
+								}
+							]
+						}
+					}),
+				'/v1/posts': (req) => {
+					creates.push(req);
+					return Response.json({ post: { _id: 'post-fresh', platforms: [] } });
+				}
+			});
+			const first = await publishTarget(db, TEST_ENV, store, targetId, { fetchImpl: dead });
+			expect(first.status).toBe('scheduled');
+			expect(first.error).toContain('X is down');
+			expect(creates).toHaveLength(0);
+
+			const fresh = mockFetch({
+				'/v1/posts/post-fresh': () => publishedPost('post-fresh'),
+				'/v1/posts/post-dead': () => new Response('must not poll the dead post', { status: 500 }),
+				'/v1/posts': (req) => {
+					creates.push(req);
+					return Response.json({ post: { _id: 'post-fresh', platforms: [] } });
+				}
+			});
+			const second = await publishTarget(db, TEST_ENV, store, targetId, {
+				fetchImpl: fresh,
+				now: new Date(Date.now() + 5 * 60_000)
+			});
+			expect(second.status).toBe('published');
+			expect(creates).toHaveLength(1);
+		});
+
 		it('a rejected key never publishes and expires the connection', async () => {
 			const conn = await zernioConnection();
 			const targetId = await target(conn);

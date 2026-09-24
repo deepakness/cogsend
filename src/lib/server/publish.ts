@@ -513,7 +513,11 @@ export async function publishTarget(
 		}
 	};
 
+	// A holder rather than a `let`: the assignment happens inside the callback,
+	// which TypeScript's narrowing cannot see from the catch block below.
+	const resumeState: { last: PublishCheckpoint | null } = { last: null };
 	const checkpoint = async (state: PublishCheckpoint) => {
+		resumeState.last = state;
 		await renewLease();
 		try {
 			await db
@@ -710,7 +714,11 @@ export async function publishTarget(
 				retryable: isFailureRetryable(err, message),
 				now,
 				partial,
-				errorDetail
+				errorDetail,
+				// A provider that checkpointed an empty segment list is saying the
+				// remote post it was resuming is dead: persist that so
+				// lastPartialResume stops offering it.
+				resumeReset: !partial && resumeState.last?.segmentIds.length === 0
 			}
 		);
 		return { status: nextStatus, error: message };
@@ -768,7 +776,10 @@ async function lastPartialResume(db: AppDb, targetId: string) {
 			remoteUrl?: string | null;
 			remotePostId?: string;
 		}>(attempt.responseSummary, {});
-		if (summary.segmentIds?.length) {
+		// An empty list is a statement, not an absence: the provider found the
+		// remote post it was resuming dead and asked for a fresh start.
+		if (Array.isArray(summary.segmentIds)) {
+			if (!summary.segmentIds.length) return null;
 			return {
 				segmentIds: summary.segmentIds,
 				segmentCids: summary.segmentCids,
@@ -792,6 +803,7 @@ async function markFailed(
 		now?: Date;
 		partial?: PublishPartialError | null;
 		errorDetail?: string | null;
+		resumeReset?: boolean;
 	} = {}
 ): Promise<'scheduled' | 'failed' | 'published'> {
 	const now = opts.now ?? new Date();
@@ -843,6 +855,8 @@ async function markFailed(
 			summary.segmentIds = opts.partial.segmentIds;
 			summary.segmentCids = opts.partial.segmentCids;
 			summary.remoteUrl = opts.partial.remoteUrl ?? null;
+		} else if (opts.resumeReset) {
+			summary.segmentIds = [];
 		}
 		if (opts.errorDetail) summary.errorDetail = opts.errorDetail;
 		await db

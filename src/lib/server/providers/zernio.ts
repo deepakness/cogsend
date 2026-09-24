@@ -86,15 +86,18 @@ function entryFor(post: ZernioPost, accountId: string): ZernioPlatformEntry | un
 
 /**
  * Zernio already retried the platform before reporting `failed`, and it says
- * why in `errorCategory`. A dead token expires the connection; a platform or
- * Zernio outage is worth another attempt (the checkpoint is dropped with the
- * failure, so that attempt creates a fresh post); anything else is the
- * content or the account, which a retry cannot fix.
+ * why in `errorCategory`. A dead token expires the connection; a platform
+ * rate limit or outage is worth another attempt (the caller empties the
+ * checkpoint first, so that attempt creates a fresh post); anything else is
+ * the content or the account, which a retry cannot fix.
  */
 function failureError(platform: string, entry: ZernioPlatformEntry): ProviderError {
 	const reason = entry.errorMessage || 'no reason given';
 	const message = `Zernio could not publish to ${platformName(platform)}: ${reason}`;
 	if (entry.errorCategory === 'auth_expired') return new ProviderError(message, { code: 'auth' });
+	if (entry.errorCategory === 'platform_rate_limit') {
+		return new ProviderError(message, { code: 'rate_limited' });
+	}
 	if (entry.errorCategory === 'platform_error' || entry.errorCategory === 'system_error') {
 		return new ProviderError(message, { code: 'upstream' });
 	}
@@ -153,9 +156,20 @@ export function zernioProviderFor(
 				await publishOpts?.checkpoint?.({ segmentIds: [postId], remoteUrl: null });
 			}
 
+			// The checkpoint is what a retry resumes from. Once the Zernio post is
+			// dead (failed, cancelled, gone), leaving its id there would make every
+			// later attempt poll the same corpse; an empty checkpoint tells
+			// publish.ts to forget it, so the next attempt creates a fresh post.
+			const forgetPost = () => publishOpts?.checkpoint?.({ segmentIds: [], remoteUrl: null });
 			for (let poll = 0; poll < maxPolls; poll++) {
 				if (poll > 0) await sleep(pollIntervalMs);
-				const post = await getPost({ apiKey, postId, fetchImpl });
+				let post: ZernioPost;
+				try {
+					post = await getPost({ apiKey, postId, fetchImpl });
+				} catch (err) {
+					if (err instanceof ProviderError && !err.retryable) await forgetPost();
+					throw err;
+				}
 				const entry = entryFor(post, accountId);
 				const status = entry?.status ?? post.status;
 				if (status === 'published') {
@@ -165,7 +179,17 @@ export function zernioProviderFor(
 						segmentIds: [postId]
 					};
 				}
-				if (status === 'failed') throw failureError(platform, entry ?? { platform, accountId });
+				if (status === 'failed') {
+					await forgetPost();
+					throw failureError(platform, entry ?? { platform, accountId });
+				}
+				if (status === 'cancelled') {
+					await forgetPost();
+					throw new ProviderError(
+						`Zernio cancelled this post before it reached ${platformName(platform)}`,
+						{ code: 'forbidden' }
+					);
+				}
 			}
 			throw new PublishPartialError('Zernio is still publishing this post', {
 				segmentIds: [postId],

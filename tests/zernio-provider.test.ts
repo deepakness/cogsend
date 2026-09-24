@@ -313,6 +313,74 @@ describe('zernioProviderFor', () => {
 	});
 });
 
+describe('zernioProviderFor: a dead resume point is cleared', () => {
+	const resumed = (entry: Record<string, unknown> | null, getStatus = 200) => {
+		const checkpoints: unknown[] = [];
+		const fetchImpl = mockFetch({
+			'/v1/posts/post-1': () =>
+				entry === null
+					? new Response('{"error":"Not found"}', { status: getStatus })
+					: Response.json({ post: { _id: 'post-1', platforms: [entry] } })
+		});
+		const run = zernioProviderFor('x', fast)
+			.publish({ text: 'hello' }, creds, undefined, fetchImpl, {
+				mediaUrlFor,
+				resume: { segmentIds: ['post-1'] },
+				checkpoint: (state) => {
+					checkpoints.push(state);
+				}
+			})
+			.catch((e: unknown) => e);
+		return { run, checkpoints };
+	};
+
+	it('on failed: empties the checkpoint before throwing, so the next attempt creates anew', async () => {
+		const { run, checkpoints } = resumed({
+			platform: 'twitter',
+			accountId: 'acc-1',
+			status: 'failed',
+			errorCategory: 'platform_error',
+			errorMessage: 'X is down'
+		});
+		const err = await run;
+		expect(err).toBeInstanceOf(ProviderError);
+		expect((err as ProviderError).code).toBe('upstream');
+		expect(checkpoints).toEqual([{ segmentIds: [], remoteUrl: null }]);
+	});
+
+	it('platform_rate_limit is retried on backoff, not parked', async () => {
+		const err = await resumed({
+			platform: 'twitter',
+			accountId: 'acc-1',
+			status: 'failed',
+			errorCategory: 'platform_rate_limit'
+		}).run;
+		expect((err as ProviderError).code).toBe('rate_limited');
+	});
+
+	it('a post cancelled in Zernio is terminal and clears the checkpoint', async () => {
+		const { run, checkpoints } = resumed({
+			platform: 'twitter',
+			accountId: 'acc-1',
+			status: 'cancelled'
+		});
+		const err = await run;
+		expect(err).toBeInstanceOf(ProviderError);
+		expect((err as ProviderError).retryable).toBe(false);
+		expect((err as ProviderError).message).toMatch(/cancelled/i);
+		expect(checkpoints).toEqual([{ segmentIds: [], remoteUrl: null }]);
+	});
+
+	it('a post that no longer exists in Zernio clears the checkpoint; a blip keeps it', async () => {
+		const gone = resumed(null, 404);
+		expect((await gone.run) as ProviderError).toMatchObject({ retryable: false });
+		expect(gone.checkpoints).toEqual([{ segmentIds: [], remoteUrl: null }]);
+		const blip = resumed(null, 503);
+		expect((await blip.run) as ProviderError).toMatchObject({ retryable: true });
+		expect(blip.checkpoints).toEqual([]);
+	});
+});
+
 describe('providerFor', () => {
 	it('routes on the meta marker, not the platform column', () => {
 		expect(providerFor({ platform: 'x', metaJson: '{"provider":"zernio"}' })).toBe(
