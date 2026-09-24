@@ -76,6 +76,9 @@ export interface ConnectionCredentials {
 	xUserId?: string;
 	/** X handle without @ (for permalinks) */
 	xUsername?: string;
+	/** Zernio-backed accounts: the API key and the Zernio SocialAccount id. */
+	zernioApiKey?: string;
+	zernioAccountId?: string;
 }
 
 export interface ConnectionMeta {
@@ -88,6 +91,9 @@ export interface ConnectionMeta {
 	personUrn?: string;
 	threadsUserId?: string;
 	xUserId?: string;
+	provider?: 'zernio';
+	zernioAccountId?: string;
+	zernioProfileId?: string;
 }
 
 export type FetchLike = typeof fetch;
