@@ -18,15 +18,15 @@ LinkedIn, Threads and X only connect once the operator has registered an app at 
 
 One row per imported account in `connections`:
 
-| Column                  | Value                                                                                   |
-| ----------------------- | --------------------------------------------------------------------------------------- |
-| `platform`              | CogSend id: `x`, `threads`, `linkedin`, `bluesky` (Zernio calls X `twitter`)            |
-| `handle`                | Zernio `username` without a leading `@`, or null                                        |
-| `display_name`          | Zernio `displayName`, falling back to the handle                                        |
-| `avatar_url`            | Zernio `profilePicture`                                                                 |
-| `credentials_encrypted` | `{ zernioApiKey, zernioAccountId }`                                                     |
-| `meta_json`             | `{ provider: 'zernio', zernioAccountId, zernioProfileId }`                              |
-| `status`                | `active`, or `expired` when Zernio reports `needsReconnection` or rejects the key       |
+| Column                  | Value                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| `platform`              | CogSend id: `x`, `threads`, `linkedin`, `bluesky` (Zernio calls X `twitter`)      |
+| `handle`                | Zernio `username` without a leading `@`, or null                                  |
+| `display_name`          | Zernio `displayName`, falling back to the handle                                  |
+| `avatar_url`            | Zernio `profilePicture`                                                           |
+| `credentials_encrypted` | `{ zernioApiKey, zernioAccountId }`                                               |
+| `meta_json`             | `{ provider: 'zernio', zernioAccountId, zernioProfileId }`                        |
+| `status`                | `active`, or `expired` when Zernio reports `needsReconnection` or rejects the key |
 
 `ConnectionCredentials` gains `zernioApiKey?` and `zernioAccountId?`; `ConnectionMeta` gains `provider?` and `zernioAccountId?`. `isZernioConnection(meta)` in `$lib/domain/zernio.ts` is the one place that reads the marker.
 
@@ -50,15 +50,15 @@ Reconnect matching: the candidate set is the user's rows on that platform whose 
 
 Errors map onto `ProviderError` codes so `publish.ts` decides expiry and retry without message matching:
 
-| Zernio answer                                                                 | Code           | Effect                                     |
-| ----------------------------------------------------------------------------- | -------------- | ------------------------------------------ |
-| HTTP 401                                                                      | `auth`         | connection `expired`, not retried          |
-| HTTP 429                                                                      | `rate_limited` | retried on backoff                         |
-| HTTP 5xx, network failure                                                     | `upstream`     | retried on backoff                         |
-| HTTP 400, 402, 403, 404, 409 (validation, billing gate, permission, dedup)    | `forbidden`    | parked as failed, connection stays active  |
-| platform entry `failed` with `errorCategory: auth_expired`                    | `auth`         | connection `expired`                       |
-| platform entry `failed` with `platform_error` or `system_error`               | `upstream`     | retried; the checkpoint is discarded by `markFailed`, so the retry creates a new post |
-| platform entry `failed`, any other category                                   | `forbidden`    | parked as failed                           |
+| Zernio answer                                                              | Code           | Effect                                                                                |
+| -------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------- |
+| HTTP 401                                                                   | `auth`         | connection `expired`, not retried                                                     |
+| HTTP 429                                                                   | `rate_limited` | retried on backoff                                                                    |
+| HTTP 5xx, network failure                                                  | `upstream`     | retried on backoff                                                                    |
+| HTTP 400, 402, 403, 404, 409 (validation, billing gate, permission, dedup) | `forbidden`    | parked as failed, connection stays active                                             |
+| platform entry `failed` with `errorCategory: auth_expired`                 | `auth`         | connection `expired`                                                                  |
+| platform entry `failed` with `platform_error` or `system_error`            | `upstream`     | retried; the checkpoint is discarded by `markFailed`, so the retry creates a new post |
+| platform entry `failed`, any other category                                | `forbidden`    | parked as failed                                                                      |
 
 Messages are prefixed `Zernio …` and carry Zernio's `error` or `errorMessage` text so the Posts tab shows why. The capped response body goes in `detail`. Zernio's 24-hour content-hash dedup (409) is the one that will surprise people: the message says the same content was posted to this account in the last 24 hours.
 
