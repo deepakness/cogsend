@@ -2,7 +2,8 @@
 
 Mastodon and Bluesky connect with what you already have. LinkedIn, Threads and X
 need an app registered at the provider first, because they issue the client id
-and secret the Worker uses.
+and secret the Worker uses. If you would rather not register apps, the optional
+[Zernio provider](zernio.md) publishes to those platforms through Zernio's own.
 
 ## OAuth app setup
 
