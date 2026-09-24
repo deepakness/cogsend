@@ -62,12 +62,74 @@ function apiMessageFrom(body: string): string | null {
  * carries exactly that pair of decisions through publish.ts.
  */
 export function zernioHttpError(prefix: string, status: number, body: string): ProviderError {
-	const message = `Zernio ${prefix} failed (${status}): ${apiMessageFrom(body) ?? body.slice(0, 300)}`;
+	const reason = apiMessageFrom(body) ?? body.slice(0, 300);
 	const detail = body.slice(0, 2000);
-	if (status === 401) return new ProviderError(message, { status, code: 'auth', detail });
-	if (status === 429) return new ProviderError(message, { status, code: 'rate_limited', detail });
-	if (status >= 500) return new ProviderError(message, { status, code: 'upstream', detail });
-	return new ProviderError(message, { status, code: 'forbidden', detail });
+	if (status === 401) {
+		return new ProviderError(`Zernio ${prefix} failed (401): ${reason}`, {
+			status,
+			code: 'auth',
+			detail
+		});
+	}
+	if (status === 429) {
+		return new ProviderError(`Zernio ${prefix} failed (429): ${reason}`, {
+			status,
+			code: 'rate_limited',
+			detail
+		});
+	}
+	if (status >= 500) {
+		return new ProviderError(`Zernio ${prefix} failed (${status}): ${reason}`, {
+			status,
+			code: 'upstream',
+			detail
+		});
+	}
+	// These two get their own sentences: humanizeError turns "already scheduled"
+	// (Zernio's 409 wording) into CogSend's own schedule clash and "403" into a
+	// platform policy refusal, both of which send the reader somewhere wrong.
+	if (status === 409) {
+		return new ProviderError(
+			'Zernio refused a duplicate: the same content was posted to this account in the last 24 hours',
+			{ status, code: 'forbidden', detail }
+		);
+	}
+	if (status === 403) {
+		return new ProviderError(
+			`Zernio refused this request: ${reason}. The API key may be read-only or lack the publishing group`,
+			{ status, code: 'forbidden', detail }
+		);
+	}
+	return new ProviderError(`Zernio ${prefix} failed (${status}): ${reason}`, {
+		status,
+		code: 'forbidden',
+		detail
+	});
+}
+
+/**
+ * Zernio checks the key's write permission and its publishing group before it
+ * reads the body, and a dryRun with no TikTok target is refused as a 400 after
+ * those checks without creating anything. So the answer says whether this key
+ * can publish: resolves for a usable key, throws the 401/403 for one that cannot.
+ */
+export async function probePublishAccess(opts: {
+	apiKey: string;
+	fetchImpl?: FetchLike;
+}): Promise<void> {
+	const fetchImpl = opts.fetchImpl ?? providerFetch;
+	const res = await fetchImpl(`${ZERNIO_API_BASE}/v1/posts`, {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${opts.apiKey}`,
+			Accept: 'application/json',
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({ dryRun: true, platforms: [] })
+	});
+	if (res.status === 401 || res.status === 403) {
+		throw zernioHttpError('publish check', res.status, await res.text());
+	}
 }
 
 export function zernioApiMessage(err: unknown): string {
@@ -152,7 +214,12 @@ export async function connectUrl(opts: {
 	return data.authUrl;
 }
 
-function unwrapPost(data: { post?: ZernioPost } | ZernioPost): ZernioPost {
+function unwrapPost(data: { post?: ZernioPost; postId?: string } | ZernioPost): ZernioPost {
+	// An idempotent retry that lands while the first request is still saving
+	// answers 202 with only the id; the poll reads the rest.
+	if ('postId' in data && typeof data.postId === 'string' && data.postId) {
+		return { _id: data.postId };
+	}
 	const post = 'post' in data && data.post ? data.post : (data as ZernioPost);
 	if (!post || typeof post._id !== 'string') throw new ProviderError('Zernio returned no post');
 	return post;

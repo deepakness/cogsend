@@ -26,6 +26,10 @@ function stubZernio(overrides: Record<string, (req: Request) => Response> = {}) 
 				return Response.json({ profiles: [{ _id: 'p1', name: 'Brand' }] });
 			}
 			if (req.url.includes('/v1/accounts')) return Response.json({ accounts: zernioAccounts });
+			// The publish-access probe: a usable key gets Zernio's dryRun 400.
+			if (req.url.endsWith('/v1/posts') && req.method === 'POST') {
+				return Response.json({ error: 'dryRun is only supported for TikTok' }, { status: 400 });
+			}
 			return new Response('unmocked', { status: 404 });
 		})
 	);
@@ -135,6 +139,16 @@ describe('zernio list and import routes', () => {
 		expect(body.error).toBe(
 			'This Zernio API key cannot be used here: This key cannot access accounts'
 		);
+	});
+
+	it('a key that can list but cannot publish is explained before anything is imported', async () => {
+		stubZernio({
+			'/v1/posts': () => Response.json({ error: 'This API key is read-only' }, { status: 403 })
+		});
+		const res = await call(accountsPOST, { apiKey: 'zk_ro' });
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toBe('This Zernio API key cannot be used here: This API key is read-only');
 	});
 
 	it('imports the chosen accounts and reuses the stored key afterwards', async () => {

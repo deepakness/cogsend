@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
 import { handleError, ok } from '$lib/server/http';
 import { requireSession } from '$lib/server/require';
-import { listAccounts, listProfiles } from '$lib/server/zernio';
+import { listAccounts, listProfiles, probePublishAccess } from '$lib/server/zernio';
 import {
 	resolveZernioKey,
 	storedZernioKey,
@@ -22,10 +22,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			userId: user.id,
 			apiKey: body.apiKey
 		});
+		// Listing is read-only, so a read-only key sails through it and would
+		// only fail at publish time; the probe says so here, before an import.
 		const [profiles, accounts, rows] = await Promise.all([
 			listProfiles({ apiKey }),
 			listAccounts({ apiKey }),
-			zernioConnectionRows({ db: locals.db, userId: user.id })
+			zernioConnectionRows({ db: locals.db, userId: user.id }),
+			probePublishAccess({ apiKey })
 		]);
 		const importedIds = new Set(
 			rows.map(

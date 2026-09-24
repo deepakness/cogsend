@@ -5,9 +5,11 @@ import {
 	getPost,
 	listAccounts,
 	listProfiles,
+	probePublishAccess,
 	zernioApiMessage,
 	zernioHttpError
 } from '$lib/server/zernio';
+import { humanizeError } from '$lib/domain/human-error';
 import { ProviderError, type FetchLike } from '$lib/server/providers/types';
 
 function mockFetch(
@@ -123,10 +125,80 @@ describe('zernio client', () => {
 		const dup = zernioHttpError('create post', 409, JSON.stringify({ error: 'Duplicate post' }));
 		expect(dup.code).toBe('forbidden');
 		expect(dup.retryable).toBe(false);
-		expect(dup.message).toContain('Duplicate post');
+		expect(dup.message).toContain('24 hours');
 		for (const status of [400, 402, 403, 404]) {
 			expect(zernioHttpError('create post', status, '{}').retryable).toBe(false);
 		}
+	});
+
+	it('words a duplicate rejection and a refused key so the Posts page cannot mistranslate them', () => {
+		// humanizeError reads "already scheduled" as CogSend's own schedule clash
+		// and "403" as a platform policy refusal; Zernio's refusals must not
+		// land on either sentence.
+		const dup = zernioHttpError(
+			'create post',
+			409,
+			JSON.stringify({
+				error:
+					'This exact content is already scheduled, publishing, or was posted to this account within the last 24 hours.'
+			})
+		);
+		expect(humanizeError(dup.message)).not.toMatch(/already scheduled/i);
+		expect(humanizeError(dup.message)).toMatch(/24 hours/);
+		const readOnly = zernioHttpError(
+			'create post',
+			403,
+			JSON.stringify({ error: 'Read-only key' })
+		);
+		expect(humanizeError(readOnly.message)).toMatch(/read-only|publishing group/i);
+		expect(readOnly.status).toBe(403);
+	});
+
+	it('adopts the post id of an idempotent 202 (still saving) instead of failing', async () => {
+		const fetchImpl = mockFetch({
+			'/v1/posts': () =>
+				Response.json(
+					{ postId: 'post-again', message: 'Post is being processed (idempotent retry)' },
+					{ status: 202 }
+				)
+		});
+		const created = await createPost({
+			apiKey: 'zk_1',
+			body: {},
+			requestId: 'r',
+			fetchImpl
+		});
+		expect(created._id).toBe('post-again');
+	});
+
+	it('probes whether a key may publish without creating anything', async () => {
+		const seen: Request[] = [];
+		const usable = mockFetch(
+			{
+				'/v1/posts': () =>
+					Response.json({ error: 'dryRun is only supported for TikTok' }, { status: 400 })
+			},
+			seen
+		);
+		await expect(
+			probePublishAccess({ apiKey: 'zk_1', fetchImpl: usable })
+		).resolves.toBeUndefined();
+		expect(seen[0].method).toBe('POST');
+		expect(await seen[0].json()).toEqual({ dryRun: true, platforms: [] });
+		const readOnly = mockFetch({
+			'/v1/posts': () => Response.json({ error: 'Read-only key' }, { status: 403 })
+		});
+		await expect(
+			probePublishAccess({ apiKey: 'zk_ro', fetchImpl: readOnly })
+		).rejects.toMatchObject({
+			status: 403
+		});
+		const dead = mockFetch({
+			'/v1/posts': () => Response.json({ error: 'Invalid API key' }, { status: 401 })
+		});
+		await expect(probePublishAccess({ apiKey: 'zk_x', fetchImpl: dead })).rejects.toMatchObject({
+			code: 'auth'
+		});
 	});
 
 	it('surfaces Zernio’s own sentence for the dialog', () => {
