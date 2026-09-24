@@ -120,7 +120,9 @@ export async function listAccounts(opts: {
 	platform?: string;
 	fetchImpl?: FetchLike;
 }): Promise<ZernioAccount[]> {
-	const params = new URLSearchParams({ limit: '200' });
+	// No page/limit: Zernio then answers with every account in one response,
+	// and paginating would cap the page at 100.
+	const params = new URLSearchParams();
 	if (opts.profileId) params.set('profileId', opts.profileId);
 	if (opts.platform) params.set('platform', opts.platform);
 	const data = await request<{ accounts?: ZernioAccount[] }>({

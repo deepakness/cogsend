@@ -51,6 +51,10 @@ describe('zernio client', () => {
 		const accountsUrl = new URL(seen[1].url);
 		expect(accountsUrl.searchParams.get('profileId')).toBe('p1');
 		expect(accountsUrl.searchParams.get('platform')).toBe('twitter');
+		// Zernio paginates only when page and limit arrive together, and caps
+		// limit at 100; sending neither returns every account in one answer.
+		expect(accountsUrl.searchParams.has('limit')).toBe(false);
+		expect(accountsUrl.searchParams.has('page')).toBe(false);
 	});
 
 	it('asks for a connect URL with the redirect and returns Zernio’s authUrl', async () => {
