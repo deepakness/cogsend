@@ -31,7 +31,7 @@ Bluesky is the exception: connect or reconnect it in Zernio's own dashboard, the
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Compose, schedule, queue | Unchanged. CogSend's scheduler publishes at the scheduled minute by asking Zernio to publish now.                                            |
 | Threads                  | X, Threads and Bluesky threads publish as threads. LinkedIn gets one post with the segments joined, as with a direct connection.             |
-| Images and video         | Sent to Zernio as URLs on your instance. Zernio compresses what a platform would reject.                                                     |
+| Images and video         | Sent to Zernio as URLs on your instance, fetched at publish time. Platform size and format limits still apply.                               |
 | Posts, retries, Insights | Unchanged. A publish is confirmed against Zernio before it is marked published; failures carry Zernio's reason.                              |
 | Duplicates               | Zernio refuses the same text to the same account within 24 hours. The post parks as failed with that reason.                                 |
 | Tokens                   | Zernio holds them and refreshes them. When a platform revokes one, the account shows **expired** here and **Reconnect** goes through Zernio. |
