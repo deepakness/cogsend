@@ -38,6 +38,8 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square"></a>
 </p>
 
+> **Supported by [Zernio](https://zernio.com/?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=readme-sponsor).** An optional paid provider that publishes to X, Threads, LinkedIn and Bluesky through Zernio's approved apps, so you skip registering your own. CogSend still runs the editor, schedule and history on your Cloudflare account. [Connect through Zernio](docs/zernio.md), or keep using your own apps.
+
 https://github.com/user-attachments/assets/4e1e623b-e862-4f70-8b48-b764590834f5
 
 ## Features
@@ -52,6 +54,7 @@ https://github.com/user-attachments/assets/4e1e623b-e862-4f70-8b48-b764590834f5
 - Disconnecting an account removes its scheduled posts, returns drafts that were still waiting, and keeps published history
 - Credentials encrypted at rest (AES-256-GCM), with 2FA on the single admin account
 - Personal API key for scripts and Shortcuts (`Settings → API access`)
+- Optional [Zernio](docs/zernio.md) provider: X, Threads, LinkedIn and Bluesky without a developer app of your own
 
 ## Install
 
@@ -95,6 +98,7 @@ Also published, with search, at [cogsend.com/docs](https://cogsend.com/docs/).
 | [Deploying](docs/deploy.md)                | the install and its flags, checking it worked, updating and rolling back, deploying by hand                   |
 | [Configuration](docs/configuration.md)     | secrets, the instance name, `APP_URL`, keeping your deployment separate from upstream, the login and recovery |
 | [OAuth apps](docs/oauth-apps.md)           | LinkedIn, Threads and X app setup, and what each platform allows                                              |
+| [Zernio](docs/zernio.md)                   | connecting through Zernio instead of registering your own apps                                                |
 | [Cloudflare Access](docs/access.md)        | putting an extra gate in front of an instance                                                                 |
 | [Domains and URLs](docs/domains.md)        | the workers.dev URL, a custom domain, and what to update when the hostname changes                            |
 | [Writing and publishing](docs/composer.md) | the composer: threads, overrides, images and alt text, publishing and scheduling                              |
