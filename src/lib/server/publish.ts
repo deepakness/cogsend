@@ -25,15 +25,16 @@ import {
 import type { AppEnv } from './env';
 import {
 	classifyProviderError,
-	getProvider,
+	estimateKeyFor,
+	providerFor,
 	ProviderError,
 	PublishPartialError,
+	ZERNIO_MAX_POLLS,
 	type ConnectionCredentials,
 	type FetchLike,
 	type PublishCheckpoint,
 	type MediaStore,
-	type NormalizedPost,
-	type PlatformId
+	type NormalizedPost
 } from './providers';
 import { providerFetch } from './providers/timed-fetch';
 import { countingFetch, type SubrequestBudget } from './budget';
@@ -301,6 +302,12 @@ export function publishCallEstimate(platform: string, content: NormalizedPost): 
 			// and the identity check run once.
 			platformCalls += segments.length * 4 + images.length * 3 + 4;
 			break;
+		case 'zernio':
+			// One create and the status polls; media travels as URLs, so no
+			// uploads. Storage reads are still counted above: bytes are hydrated
+			// before any provider runs.
+			platformCalls += ZERNIO_MAX_POLLS;
+			break;
 		default:
 			platformCalls += segments.length * 3 + media.length * 3;
 	}
@@ -355,13 +362,15 @@ export async function publishTarget(
 	// target WITHOUT burning an attempt. The WHERE excludes scheduled rows
 	// so future schedules are never touched here.
 	let knownPlatform: string | null = null;
+	let knownEstimateKey: string | null = null;
 	try {
 		const preConn = await first(
 			db.select().from(connections).where(eq(connections.id, target.connectionId))
 		);
 		if (preConn) {
 			knownPlatform = preConn.platform;
-			const provider = getProvider(preConn.platform as PlatformId);
+			knownEstimateKey = estimateKeyFor(preConn);
+			const provider = providerFor(preConn);
 			const reason = provider.refreshImpossibleReason?.(
 				await decryptJson<ConnectionCredentials>(
 					preConn.credentialsEncrypted,
@@ -403,7 +412,8 @@ export async function publishTarget(
 	if (options.budget && !options.mustTry && knownPlatform) {
 		try {
 			prebuilt = await buildNormalizedPost(db, target.draftId, knownPlatform);
-			const needed = publishCallEstimate(knownPlatform, prebuilt) + PUBLISH_RESERVE_CALLS;
+			const needed =
+				publishCallEstimate(knownEstimateKey ?? knownPlatform, prebuilt) + PUBLISH_RESERVE_CALLS;
 			if (options.budget.remaining < needed) {
 				return { status: target.status, skipped: true, deferred: true };
 			}
@@ -528,7 +538,7 @@ export async function publishTarget(
 			env.APP_ENCRYPTION_KEY
 		);
 		const meta = parseJson<{ maxCharacters?: number; handle?: string }>(conn.metaJson, {});
-		const provider = getProvider(conn.platform as PlatformId);
+		const provider = providerFor(conn);
 		const content = await hydrateMedia(
 			prebuilt ?? (await buildNormalizedPost(db, target.draftId, conn.platform)),
 			store

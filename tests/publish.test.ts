@@ -1378,4 +1378,109 @@ describe('publish auth classification', () => {
 		);
 		expect(creds.threadsUserId).toBe('999');
 	});
+
+	describe('through Zernio', () => {
+		async function zernioConnection(overrides: Record<string, unknown> = {}) {
+			const id = newId();
+			const now = new Date();
+			await db.insert(connections).values({
+				id,
+				userId,
+				platform: 'x',
+				handle: 'acme',
+				credentialsEncrypted: await encryptJson(
+					{ zernioApiKey: 'zk_1', zernioAccountId: 'acc-1' },
+					TEST_ENV.APP_ENCRYPTION_KEY
+				),
+				metaJson: JSON.stringify({ provider: 'zernio', zernioAccountId: 'acc-1' }),
+				status: 'active',
+				createdAt: now,
+				updatedAt: now,
+				...overrides
+			});
+			return id;
+		}
+
+		const target = (connectionId: string) => pendingTarget(connectionId, `zernio ${newId()}`);
+
+		const publishedPost = (postId: string) =>
+			Response.json({
+				post: {
+					_id: postId,
+					platforms: [
+						{
+							platform: 'twitter',
+							accountId: 'acc-1',
+							status: 'published',
+							platformPostId: '555',
+							platformPostUrl: 'https://x.com/acme/status/555'
+						}
+					]
+				}
+			});
+
+		it('publishes and records the platform permalink', async () => {
+			const conn = await zernioConnection();
+			const targetId = await target(conn);
+			const seen: Request[] = [];
+			const fetchImpl = mockFetch({
+				'/v1/posts/post-a': () => publishedPost('post-a'),
+				'/v1/posts': (req) => {
+					seen.push(req);
+					return Response.json({ post: { _id: 'post-a', platforms: [] } });
+				}
+			});
+			// The real poll interval is 3 s; the provider is memoised, so the
+			// test drives the default and expects the first poll to settle it.
+			const result = await publishTarget(db, TEST_ENV, store, targetId, { fetchImpl });
+			expect(result.status).toBe('published');
+			const row = (
+				await db.select().from(publishTargets).where(eq(publishTargets.id, targetId))
+			)[0];
+			expect(row.remotePostId).toBe('555');
+			expect(row.remoteUrl).toBe('https://x.com/acme/status/555');
+			expect(seen[0].headers.get('authorization')).toBe('Bearer zk_1');
+			expect(seen[0].headers.get('x-request-id')).toBe(`${targetId}-0`);
+		});
+
+		it('expires the connection when Zernio reports the token dead', async () => {
+			const conn = await zernioConnection();
+			const targetId = await target(conn);
+			const fetchImpl = mockFetch({
+				'/v1/posts/post-b': () =>
+					Response.json({
+						post: {
+							_id: 'post-b',
+							platforms: [
+								{
+									platform: 'twitter',
+									accountId: 'acc-1',
+									status: 'failed',
+									errorCategory: 'auth_expired',
+									errorMessage: 'Reconnect the account'
+								}
+							]
+						}
+					}),
+				'/v1/posts': () => Response.json({ post: { _id: 'post-b', platforms: [] } })
+			});
+			const result = await publishTarget(db, TEST_ENV, store, targetId, { fetchImpl });
+			expect(result.status).toBe('failed');
+			expect(result.error).toContain('Reconnect the account');
+			const row = (await db.select().from(connections).where(eq(connections.id, conn)))[0];
+			expect(row.status).toBe('expired');
+		});
+
+		it('a rejected key never publishes and expires the connection', async () => {
+			const conn = await zernioConnection();
+			const targetId = await target(conn);
+			const fetchImpl = mockFetch({
+				'/v1/posts': () => Response.json({ error: 'Invalid API key' }, { status: 401 })
+			});
+			const result = await publishTarget(db, TEST_ENV, store, targetId, { fetchImpl });
+			expect(result.status).toBe('failed');
+			const row = (await db.select().from(connections).where(eq(connections.id, conn)))[0];
+			expect(row.status).toBe('expired');
+		});
+	});
 });

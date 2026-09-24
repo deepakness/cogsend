@@ -1,0 +1,326 @@
+import { describe, expect, it } from 'vitest';
+import {
+	buildZernioPostBody,
+	ZERNIO_MAX_POLLS,
+	zernioProviderFor
+} from '$lib/server/providers/zernio';
+import { providerFor, estimateKeyFor } from '$lib/server/providers';
+import { ProviderError, PublishPartialError, type FetchLike } from '$lib/server/providers/types';
+
+function mockFetch(
+	handlers: Record<string, (req: Request) => Response | Promise<Response>>,
+	seen: Request[] = []
+): FetchLike {
+	return async (input, init) => {
+		const url =
+			typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+		const req = new Request(url, init);
+		seen.push(req);
+		for (const [key, handler] of Object.entries(handlers)) {
+			if (url.includes(key)) return handler(req);
+		}
+		return new Response(`unmocked ${url}`, { status: 404 });
+	};
+}
+
+const creds = { zernioApiKey: 'zk_1', zernioAccountId: 'acc-1' };
+const mediaUrlFor = (key: string) => `https://media.example/${key}`;
+const fast = { pollIntervalMs: 0, maxPolls: 3 };
+
+describe('buildZernioPostBody', () => {
+	it('sends a single post with its media as public URLs', async () => {
+		const body = await buildZernioPostBody({
+			platform: 'x',
+			accountId: 'acc-1',
+			content: {
+				text: 'hello',
+				media: [
+					{ storageKey: 'k1', mime: 'image/png', alt: 'a cat' },
+					{ storageKey: 'k2', mime: 'image/gif' },
+					{ storageKey: 'k3', mime: 'video/mp4' }
+				]
+			},
+			mediaUrlFor
+		});
+		expect(body).toEqual({
+			content: 'hello',
+			mediaItems: [
+				{ type: 'image', url: 'https://media.example/k1', mimeType: 'image/png', altText: 'a cat' },
+				{ type: 'gif', url: 'https://media.example/k2', mimeType: 'image/gif' },
+				{ type: 'video', url: 'https://media.example/k3', mimeType: 'video/mp4' }
+			],
+			platforms: [{ platform: 'twitter', accountId: 'acc-1' }],
+			publishNow: true
+		});
+	});
+
+	it('sends a thread as threadItems on X, Threads and Bluesky', async () => {
+		for (const [platform, zernio] of [
+			['x', 'twitter'],
+			['threads', 'threads'],
+			['bluesky', 'bluesky']
+		] as const) {
+			const body = await buildZernioPostBody({
+				platform,
+				accountId: 'acc-1',
+				content: {
+					text: 'one',
+					thread: [
+						{ text: 'one' },
+						{ text: 'two', media: [{ storageKey: 'k', mime: 'image/jpeg' }] }
+					]
+				},
+				mediaUrlFor
+			});
+			expect(body.content).toBe('one');
+			expect(body).not.toHaveProperty('mediaItems');
+			expect(body.platforms).toEqual([
+				{
+					platform: zernio,
+					accountId: 'acc-1',
+					platformSpecificData: {
+						threadItems: [
+							{ content: 'one', mediaItems: [] },
+							{
+								content: 'two',
+								mediaItems: [
+									{ type: 'image', url: 'https://media.example/k', mimeType: 'image/jpeg' }
+								]
+							}
+						]
+					}
+				}
+			]);
+		}
+	});
+
+	it('flattens a thread into one LinkedIn post, like the direct provider', async () => {
+		const body = await buildZernioPostBody({
+			platform: 'linkedin',
+			accountId: 'acc-1',
+			content: {
+				text: 'one',
+				thread: [
+					{ text: 'one', media: [{ storageKey: 'k1', mime: 'image/png' }] },
+					{ text: 'two', media: [{ storageKey: 'k2', mime: 'image/png' }] }
+				]
+			},
+			mediaUrlFor
+		});
+		expect(body.content).toBe('one\n\ntwo');
+		expect((body.mediaItems as unknown[]).length).toBe(2);
+		expect(body.platforms).toEqual([{ platform: 'linkedin', accountId: 'acc-1' }]);
+	});
+
+	it('refuses to build without a media signer, like Threads', async () => {
+		await expect(
+			buildZernioPostBody({
+				platform: 'x',
+				accountId: 'acc-1',
+				content: { text: 'x', media: [{ storageKey: 'k', mime: 'image/png' }] }
+			})
+		).rejects.toThrow(/media/i);
+	});
+});
+
+describe('zernioProviderFor', () => {
+	it('keeps the direct platform’s id, capabilities and validation', () => {
+		const x = zernioProviderFor('x');
+		expect(x.id).toBe('x');
+		expect(x.capabilities.supportsThreads).toBe(true);
+		expect(x.validate({ text: 'a'.repeat(281) }).some((i) => i.code === 'max_length')).toBe(true);
+		expect(zernioProviderFor('linkedin').capabilities.supportsThreads).toBe(false);
+		expect(zernioProviderFor('x')).toBe(zernioProviderFor('x'));
+	});
+
+	it('creates, checkpoints the Zernio post id, polls to published', async () => {
+		const seen: Request[] = [];
+		let polls = 0;
+		const fetchImpl = mockFetch(
+			{
+				'/v1/posts/post-1': () => {
+					polls += 1;
+					return Response.json({
+						post: {
+							_id: 'post-1',
+							platforms: [
+								polls < 2
+									? { platform: 'twitter', accountId: 'acc-1', status: 'publishing' }
+									: {
+											platform: 'twitter',
+											accountId: 'acc-1',
+											status: 'published',
+											platformPostId: '1234',
+											platformPostUrl: 'https://x.com/u/status/1234'
+										}
+							]
+						}
+					});
+				},
+				'/v1/posts': () =>
+					Response.json({
+						post: {
+							_id: 'post-1',
+							platforms: [{ platform: 'twitter', accountId: 'acc-1', status: 'pending' }]
+						}
+					})
+			},
+			seen
+		);
+		const checkpoints: unknown[] = [];
+		const result = await zernioProviderFor('x', fast).publish(
+			{ text: 'hello' },
+			creds,
+			undefined,
+			fetchImpl,
+			{
+				mediaUrlFor,
+				checkpoint: (state) => {
+					checkpoints.push(state);
+				},
+				idempotencyKey: (i) => `target-1:${i}`
+			}
+		);
+		expect(seen[0].headers.get('x-request-id')).toBe('target-1-0');
+		expect(checkpoints[0]).toEqual({ segmentIds: ['post-1'], remoteUrl: null });
+		expect(result).toEqual({
+			remotePostId: '1234',
+			remoteUrl: 'https://x.com/u/status/1234',
+			segmentIds: ['post-1']
+		});
+	});
+
+	it('gives up after the poll window with a partial error carrying the post id', async () => {
+		let polls = 0;
+		const fetchImpl = mockFetch({
+			'/v1/posts/post-1': () => {
+				polls += 1;
+				return Response.json({
+					post: {
+						_id: 'post-1',
+						platforms: [{ platform: 'twitter', accountId: 'acc-1', status: 'publishing' }]
+					}
+				});
+			},
+			'/v1/posts': () => Response.json({ post: { _id: 'post-1', platforms: [] } })
+		});
+		const err = await zernioProviderFor('x', fast)
+			.publish({ text: 'hello' }, creds, undefined, fetchImpl, { mediaUrlFor })
+			.catch((e) => e);
+		expect(err).toBeInstanceOf(PublishPartialError);
+		expect((err as PublishPartialError).segmentIds).toEqual(['post-1']);
+		expect(polls).toBe(fast.maxPolls);
+		expect(ZERNIO_MAX_POLLS).toBe(8);
+	});
+
+	it('a create replay is polled, not re-created: resume skips the create', async () => {
+		const seen: Request[] = [];
+		const fetchImpl = mockFetch(
+			{
+				'/v1/posts/post-1': () =>
+					Response.json({
+						post: {
+							_id: 'post-1',
+							platforms: [
+								{
+									platform: 'twitter',
+									accountId: 'acc-1',
+									status: 'published',
+									platformPostId: '99',
+									platformPostUrl: 'https://x.com/u/status/99'
+								}
+							]
+						}
+					})
+			},
+			seen
+		);
+		const result = await zernioProviderFor('x', fast).publish(
+			{ text: 'hello' },
+			creds,
+			undefined,
+			fetchImpl,
+			{ mediaUrlFor, resume: { segmentIds: ['post-1'] } }
+		);
+		expect(seen.every((r) => r.method === 'GET')).toBe(true);
+		expect(result.remotePostId).toBe('99');
+	});
+
+	it('a resumed poll that finds failed parks with Zernio’s reason', async () => {
+		const fetchImpl = mockFetch({
+			'/v1/posts/post-1': () =>
+				Response.json({
+					post: {
+						_id: 'post-1',
+						platforms: [
+							{
+								platform: 'twitter',
+								accountId: 'acc-1',
+								status: 'failed',
+								errorMessage: 'Tweet text is too long',
+								errorCategory: 'user_content'
+							}
+						]
+					}
+				})
+		});
+		const err = await zernioProviderFor('x', fast)
+			.publish({ text: 'hello' }, creds, undefined, fetchImpl, {
+				mediaUrlFor,
+				resume: { segmentIds: ['post-1'] }
+			})
+			.catch((e) => e);
+		expect(err).toBeInstanceOf(ProviderError);
+		expect((err as ProviderError).message).toContain('Tweet text is too long');
+		expect((err as ProviderError).code).toBe('forbidden');
+		expect((err as ProviderError).retryable).toBe(false);
+	});
+
+	it('maps Zernio failure categories onto expiry and retry decisions', async () => {
+		const attempt = async (errorCategory: string) => {
+			const fetchImpl = mockFetch({
+				'/v1/posts/post-1': () =>
+					Response.json({
+						post: {
+							_id: 'post-1',
+							platforms: [
+								{ platform: 'twitter', accountId: 'acc-1', status: 'failed', errorCategory }
+							]
+						}
+					})
+			});
+			const outcome: unknown = await zernioProviderFor('x', fast)
+				.publish({ text: 'hello' }, creds, undefined, fetchImpl, {
+					mediaUrlFor,
+					resume: { segmentIds: ['post-1'] }
+				})
+				.catch((e) => e);
+			if (!(outcome instanceof ProviderError)) throw new Error('expected a ProviderError');
+			return outcome;
+		};
+		expect((await attempt('auth_expired')).code).toBe('auth');
+		expect((await attempt('platform_error')).code).toBe('upstream');
+		expect((await attempt('system_error')).retryable).toBe(true);
+		expect((await attempt('user_abuse')).retryable).toBe(false);
+	});
+
+	it('requires the Zernio credentials on the row', async () => {
+		await expect(
+			zernioProviderFor('x', fast).publish({ text: 'hello' }, {}, undefined, mockFetch({}), {
+				mediaUrlFor
+			})
+		).rejects.toMatchObject({ code: 'auth' });
+	});
+});
+
+describe('providerFor', () => {
+	it('routes on the meta marker, not the platform column', () => {
+		expect(providerFor({ platform: 'x', metaJson: '{"provider":"zernio"}' })).toBe(
+			zernioProviderFor('x')
+		);
+		expect(providerFor({ platform: 'x', metaJson: '{}' }).id).toBe('x');
+		expect(providerFor({ platform: 'x', metaJson: '{}' })).not.toBe(zernioProviderFor('x'));
+		expect(estimateKeyFor({ platform: 'x', metaJson: '{"provider":"zernio"}' })).toBe('zernio');
+		expect(estimateKeyFor({ platform: 'x', metaJson: null })).toBe('x');
+	});
+});
