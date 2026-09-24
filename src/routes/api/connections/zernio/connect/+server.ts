@@ -23,6 +23,13 @@ export const POST: RequestHandler = async ({ request, locals, cookies }) => {
 		const platform = typeof body.platform === 'string' ? body.platform : '';
 		const zernioPlatform = isPlatformId(platform) ? toZernioPlatform(platform) : null;
 		if (!zernioPlatform) return fail('That platform cannot be connected through Zernio');
+		// Zernio's hosted Bluesky page appends its result to the redirect with a
+		// second `?`, which corrupts the bound state, and names no account id.
+		if (platform === 'bluesky') {
+			return fail(
+				'Bluesky cannot be connected from here yet: connect it in Zernio, then import it'
+			);
+		}
 		const profileId = typeof body.profileId === 'string' ? body.profileId.trim() : '';
 		if (!profileId) return fail('Pick the Zernio profile to connect the account to');
 		const apiKey = await resolveZernioKey({

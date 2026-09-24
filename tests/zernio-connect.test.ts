@@ -102,6 +102,11 @@ describe('zernio connect-through', () => {
 		expect((await connect({ apiKey: 'zk', profileId: 'p1', platform: 'mastodon' })).status).toBe(
 			400
 		);
+		// Zernio's hosted Bluesky flow appends its result with a second `?`, which
+		// breaks the bound state, and reports no account id: import it instead.
+		const bluesky = await connect({ apiKey: 'zk', profileId: 'p1', platform: 'bluesky' });
+		expect(bluesky.status).toBe(400);
+		expect(((await bluesky.json()) as { error: string }).error).toMatch(/Bluesky .* Zernio/);
 		expect((await connect({ apiKey: 'zk', platform: 'x' })).status).toBe(400);
 	});
 
@@ -118,12 +123,17 @@ describe('zernio connect-through', () => {
 		expect(redirect.origin + redirect.pathname).toBe(
 			'https://cog.example/api/connections/zernio/callback'
 		);
+		const bound = redirect.searchParams.get('pending')!;
 		const pending = (
-			await db.select().from(oauthPending).where(eq(oauthPending.instanceUrl, 'zernio'))
+			await db
+				.select()
+				.from(oauthPending)
+				.where(eq(oauthPending.id, bound.split('.')[0]))
 		)[0];
+		expect(pending.instanceUrl).toBe('zernio');
 		expect(pending.clientId).toBe('p1');
 		expect(pending.clientSecretEnc).not.toContain('zk_1');
-		expect(redirect.searchParams.get('pending')).toMatch(new RegExp(`^${pending.id}\\.`));
+		expect(bound).toMatch(/^[0-9a-f]{32}\.[0-9a-f]{64}$/);
 	});
 
 	it('the callback imports the account Zernio names, once', async () => {

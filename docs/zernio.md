@@ -23,6 +23,8 @@ In the same dialog, pick the platform and the Zernio profile under **Connect a n
 
 **Reconnect** on a Zernio-backed row starts the same flow; **Check** asks Zernio whether the account still has a live token.
 
+Bluesky is the exception: connect or reconnect it in Zernio's own dashboard, then import it (or press **Check**) here. Zernio's hosted Bluesky page cannot yet hand the account back to CogSend.
+
 ## What works the same, and what differs
 
 | Feature                  | Through Zernio                                                                                                                               |

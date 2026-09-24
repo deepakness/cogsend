@@ -48,7 +48,9 @@
 		needsReconnection: boolean;
 		imported: boolean;
 	};
-	const ZERNIO_PLATFORMS = ['x', 'threads', 'linkedin', 'bluesky'] as const;
+	// Bluesky is imported, never connected from here: Zernio's hosted Bluesky
+	// page cannot bring the visitor back with a usable result yet.
+	const ZERNIO_PLATFORMS = ['x', 'threads', 'linkedin'] as const;
 	const isZernioPlatform = (p: string): p is (typeof ZERNIO_PLATFORMS)[number] =>
 		(ZERNIO_PLATFORMS as readonly string[]).includes(p);
 	const viaZernio = (account: Connection) => account.metaJson?.provider === 'zernio';
@@ -416,6 +418,10 @@
 		err = null;
 		if (viaZernio(account)) {
 			const profileId = account.metaJson?.zernioProfileId ?? '';
+			if (account.platform === 'bluesky') {
+				err = 'Reconnect Bluesky in Zernio, then press Check';
+				return;
+			}
 			if (!isZernioPlatform(account.platform) || !profileId) {
 				err = 'This account has no Zernio profile recorded — import it again';
 				return;
