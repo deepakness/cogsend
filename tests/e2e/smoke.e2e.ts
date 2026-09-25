@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { expect, test, type Page } from '@playwright/test';
 import {
 	E2E_ACCOUNT,
@@ -633,6 +634,24 @@ test('api key works logged out, stays out of key management', async () => {
 	test.setTimeout(120_000);
 	await page.goto('/settings');
 	await expect(page.getByTestId('api-key-section')).toBeVisible();
+	const mcpSetup = page.getByTestId('mcp-setup');
+	await expect(mcpSetup).toBeVisible();
+	const origin = new URL(page.url()).origin;
+	await expect(page.getByTestId('mcp-endpoint')).toHaveText(`${origin}/api/mcp`);
+	await expect(mcpSetup).toContainText('Claude Code');
+	await expect(mcpSetup).toContainText('OpenAI Codex');
+	await expect(mcpSetup).toContainText('Generic client');
+	await expect(mcpSetup).toContainText('CF-Access-Client-Id');
+	await expect(mcpSetup.locator('pre').nth(0)).toContainText('Bearer ${COGSEND_API_KEY}');
+	await expect(mcpSetup.locator('pre').nth(1)).toContainText(
+		'bearer_token_env_var = "COGSEND_API_KEY"'
+	);
+	await expect(mcpSetup.locator('pre').nth(1)).toContainText(
+		'default_tools_approval_mode = "prompt"'
+	);
+	await expect(mcpSetup.locator('pre').nth(2)).toContainText('StreamableHTTPClientTransport');
+	await expect(page.locator('input[name="api-key-scopes"][value="read-write"]')).toBeChecked();
+	await page.locator('input[name="api-key-scopes"][value="read"]').check();
 	await clickUntilVisible(
 		page,
 		page.getByRole('button', { name: 'Generate API key' }),
@@ -646,12 +665,93 @@ test('api key works logged out, stays out of key management', async () => {
 	await page.getByRole('button', { name: 'I have saved it' }).click();
 	await expect(reveal).toBeHidden();
 	await expect(page.getByTestId('api-key-status')).toContainText(rawKey.trim().slice(0, 12));
+	// Dismissing the one-time reveal must remove the complete key from rendered markup.
+	expect(await page.content()).not.toContain(rawKey.trim());
 
-	// Logged-out Node fetch (no cookies): key reads + writes as the user…
-	const origin = new URL(page.url()).origin;
-	const keyed = { Authorization: `Bearer ${rawKey.trim()}` };
+	// The official Streamable HTTP client can initialize and call a read tool with this fresh key.
+	const supportedClient = new Client(
+		{ name: 'cogsend-settings-e2e', version: '1.0.0' },
+		{ versionNegotiation: { mode: { pin: '2026-07-28' } } }
+	);
+	const supportedTransport = new StreamableHTTPClientTransport(new URL(`${origin}/api/mcp`), {
+		requestInit: { headers: { Authorization: `Bearer ${rawKey.trim()}` } }
+	});
+	await supportedClient.connect(supportedTransport);
+	const { tools } = await supportedClient.listTools();
+	expect(tools.map((tool) => tool.name)).toContain('list_drafts');
+	const supportedRead = await supportedClient.callTool({
+		name: 'list_drafts',
+		arguments: { limit: 1 }
+	});
+	expect(supportedRead.isError).not.toBe(true);
+	await supportedClient.close();
+
+	// Logged-out Node fetch (no cookies): the read-only key can read but cannot write.
+	let currentKey = rawKey.trim();
+	let keyed = { Authorization: `Bearer ${currentKey}` };
 	const drafts = await fetch(`${origin}/api/drafts`, { headers: keyed });
 	expect(drafts.status).toBe(200);
+	const mcpCall = (
+		key: string,
+		name = 'create_draft',
+		args: Record<string, unknown> = { title: 'Read-only scope check' }
+	) =>
+		fetch(`${origin}/api/mcp`, {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${key}`,
+				'Content-Type': 'application/json',
+				Accept: 'application/json, text/event-stream',
+				'mcp-method': 'tools/call',
+				'mcp-name': name,
+				'mcp-protocol-version': '2026-07-28'
+			},
+			body: JSON.stringify({
+				jsonrpc: '2.0',
+				id: 1,
+				method: 'tools/call',
+				params: {
+					name,
+					arguments: args,
+					_meta: {
+						'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+						'io.modelcontextprotocol/clientCapabilities': {}
+					}
+				}
+			})
+		});
+	const readOnlyRead = await mcpCall(currentKey, 'list_drafts', { limit: 1 }).then((response) =>
+		response.json()
+	);
+	expect(readOnlyRead.result.isError).not.toBe(true);
+	expect(readOnlyRead.result.structuredContent.drafts).toEqual(expect.any(Array));
+	const readOnlyWrite = await mcpCall(currentKey).then((response) => response.json());
+	expect(readOnlyWrite.result.isError).toBe(true);
+	expect(readOnlyWrite.result.structuredContent).toMatchObject({ status: 403 });
+
+	// Replace the key with read+write. Replacement must revoke the first key immediately.
+	await page.locator('input[name="api-key-scopes"][value="read-write"]').check();
+	await clickUntilVisible(
+		page,
+		page.getByRole('button', { name: 'Generate replacement' }),
+		page.getByTestId('confirm-dialog-ok')
+	);
+	await page.getByTestId('confirm-dialog-ok').click();
+	await expect(page.getByTestId('api-key-reveal')).toBeVisible({ timeout: 15000 });
+	const replacementKey = (await page.getByTestId('api-key-value').innerText()).trim();
+	expect(replacementKey).toMatch(/^cog_[0-9a-fA-F]{64}$/);
+	await page.getByRole('button', { name: 'I have saved it' }).click();
+	expect(await page.content()).not.toContain(replacementKey);
+	expect(
+		(await fetch(`${origin}/api/drafts`, { headers: { Authorization: `Bearer ${currentKey}` } }))
+			.status
+	).toBe(401);
+	expect((await mcpCall(currentKey)).status).toBe(401);
+	currentKey = replacementKey;
+	keyed = { Authorization: `Bearer ${currentKey}` };
+	const writeAllowed = await mcpCall(currentKey).then((response) => response.json());
+	expect(writeAllowed.result.isError).not.toBe(true);
+	expect(writeAllowed.result.structuredContent.draft.title).toBe('Read-only scope check');
 	// …but cannot touch key management or credentials.
 	expect((await fetch(`${origin}/api/key`, { headers: keyed })).status).toBe(401);
 	expect(
@@ -680,6 +780,7 @@ test('api key works logged out, stays out of key management', async () => {
 	await page.getByTestId('confirm-dialog-ok').click();
 	await expect(page.getByTestId('api-key-status')).toContainText('No active key');
 	expect((await fetch(`${origin}/api/drafts`, { headers: keyed })).status).toBe(401);
+	expect((await mcpCall(currentKey)).status).toBe(401);
 });
 
 test('composer chrome: counts, thread cards and override tabs', async () => {

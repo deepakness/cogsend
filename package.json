@@ -53,6 +53,7 @@
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
 		"@libsql/client": "^0.18.0",
+		"@modelcontextprotocol/client": "^2.0.0",
 		"@playwright/test": "^1.63.0",
 		"@sveltejs/adapter-cloudflare": "^7.2.8",
 		"@sveltejs/kit": "^2.70.3",
@@ -77,6 +78,7 @@
 	},
 	"dependencies": {
 		"@lucide/svelte": "^1.45.0",
+		"@modelcontextprotocol/server": "^2.0.0",
 		"date-fns": "^4.4.0",
 		"drizzle-orm": "^0.45.2",
 		"uqr": "^0.1.3",

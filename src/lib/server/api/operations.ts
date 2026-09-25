@@ -1,4 +1,16 @@
-import { and, desc, eq, inArray, isNull, lte, or, type InferSelectModel } from 'drizzle-orm';
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	inArray,
+	isNull,
+	lte,
+	ne,
+	or,
+	sql,
+	type InferSelectModel
+} from 'drizzle-orm';
 import {
 	countGraphemes,
 	mastodonWeightedLength,
@@ -17,7 +29,12 @@ import {
 	publishTargets
 } from '$lib/server/db/schema';
 import { batchQueries, chunkIds, first, newId } from '$lib/server/db/client';
-import { serializeDraft, serializeVariant } from '$lib/server/serialize';
+import {
+	serializeConnection,
+	serializeDraft,
+	serializeMedia,
+	serializeVariant
+} from '$lib/server/serialize';
 import {
 	MAX_VARIANT_OPTIONS_LENGTH,
 	parseDraftBody,
@@ -54,6 +71,32 @@ function invalid(message: string, status = 400, details?: Record<string, unknown
 	throw new ApiOperationError(message, status, details);
 }
 
+export async function listConnections(ctx: OperationContext, userId: string) {
+	const rows = await ctx.db
+		.select({
+			id: connections.id,
+			platform: connections.platform,
+			displayName: connections.displayName,
+			handle: connections.handle,
+			avatarUrl: connections.avatarUrl,
+			instanceUrl: connections.instanceUrl,
+			status: connections.status,
+			metaJson: connections.metaJson,
+			createdAt: connections.createdAt
+		})
+		.from(connections)
+		.where(and(eq(connections.userId, userId), ne(connections.status, 'disconnected')))
+		.orderBy(desc(connections.createdAt));
+	return {
+		connections: rows.map(serializeConnection),
+		configured: {
+			linkedin: Boolean(ctx.env.LINKEDIN_CLIENT_ID && ctx.env.LINKEDIN_CLIENT_SECRET),
+			threads: Boolean(ctx.env.THREADS_APP_ID && ctx.env.THREADS_APP_SECRET),
+			x: Boolean(ctx.env.X_CLIENT_ID)
+		},
+		appUrl: ctx.env.APP_URL
+	};
+}
 export function validatePost(input: {
 	text?: unknown;
 	platform?: unknown;
@@ -82,6 +125,48 @@ export function validatePost(input: {
 		x,
 		issues
 	};
+}
+async function loadDraft(ctx: OperationContext, id: string, userId: string) {
+	const [dr, variants, media, targets] = (await batchQueries(ctx.db, [
+		ctx.db
+			.select()
+			.from(drafts)
+			.where(and(eq(drafts.id, id), eq(drafts.userId, userId))),
+		ctx.db.select().from(draftVariants).where(eq(draftVariants.draftId, id)),
+		ctx.db.select().from(draftMedia).where(eq(draftMedia.draftId, id)),
+		ctx.db.select().from(publishTargets).where(eq(publishTargets.draftId, id))
+	])) as [
+		InferSelectModel<typeof drafts>[],
+		InferSelectModel<typeof draftVariants>[],
+		InferSelectModel<typeof draftMedia>[],
+		InferSelectModel<typeof publishTargets>[]
+	];
+	const draft = dr[0];
+	if (!draft) return null;
+	media.sort((a, b) => a.sortOrder - b.sortOrder);
+	const ids = [...new Set(targets.map((t) => t.connectionId))];
+	const conns = ids.length
+		? await ctx.db
+				.select({
+					id: connections.id,
+					platform: connections.platform,
+					handle: connections.handle,
+					displayName: connections.displayName
+				})
+				.from(connections)
+				.where(inArray(connections.id, ids))
+		: [];
+	const byId = new Map(conns.map((c) => [c.id, c]));
+	return serializeDraft(draft, {
+		variants,
+		media,
+		targets: targets.map((t) => ({ ...t, connection: byId.get(t.connectionId) }))
+	});
+}
+export async function getDraft(ctx: OperationContext, userId: string, draftId: string) {
+	const draft = await loadDraft(ctx, draftId, userId);
+	if (!draft) invalid('Not found', 404);
+	return { draft };
 }
 export async function updateDraft(
 	ctx: OperationContext,
@@ -120,6 +205,22 @@ export async function updateDraft(
 		.where(eq(drafts.id, id));
 	return { ok: true as const };
 }
+export async function deleteDraft(ctx: OperationContext, userId: string, id: string) {
+	const old = await first(
+		ctx.db
+			.select()
+			.from(drafts)
+			.where(and(eq(drafts.id, id), eq(drafts.userId, userId)))
+	);
+	if (!old) invalid('Not found', 404);
+	const ts = await ctx.db.select().from(publishTargets).where(eq(publishTargets.draftId, id));
+	if (draftHasInFlightPublish(ts)) invalid('Publishing in progress — try again shortly', 409);
+	const files = await ctx.db.select().from(draftMedia).where(eq(draftMedia.draftId, id));
+	for (const f of files) await ctx.media.delete(f.storageKey);
+	await ctx.db.delete(drafts).where(eq(drafts.id, id));
+	return { ok: true as const };
+}
+
 export async function scheduleDraft(
 	ctx: OperationContext,
 	userId: string,
@@ -806,4 +907,116 @@ export async function publishDraft(
 				})
 			: null
 	};
+}
+
+export async function listQueue(ctx: OperationContext, userId: string, requestedLimit?: number) {
+	const limit = Number.isFinite(requestedLimit)
+		? Math.min(500, Math.max(1, Math.floor(requestedLimit!)))
+		: 100;
+	const targetsQuery = ctx.db
+		.select()
+		.from(publishTargets)
+		.where(
+			and(
+				inArray(
+					publishTargets.connectionId,
+					ctx.db
+						.select({ id: connections.id })
+						.from(connections)
+						.where(eq(connections.userId, userId))
+				),
+				inArray(publishTargets.status, [
+					'scheduled',
+					'pending',
+					'publishing',
+					'failed',
+					'published'
+				])
+			)
+		)
+		.orderBy(
+			sql`${publishTargets.scheduledFor} is null`,
+			asc(publishTargets.scheduledFor),
+			desc(publishTargets.updatedAt)
+		)
+		.limit(limit + 1);
+	type TargetRow = InferSelectModel<typeof publishTargets>;
+	type ConnectionRow = Pick<
+		InferSelectModel<typeof connections>,
+		'id' | 'platform' | 'handle' | 'displayName' | 'avatarUrl' | 'status'
+	>;
+	type DraftLite = { id: string; title: string | null; baseBody: string; status: string };
+	const [allTargets, ownedConnections] = (await batchQueries(ctx.db, [
+		targetsQuery,
+		ctx.db
+			.select({
+				id: connections.id,
+				platform: connections.platform,
+				handle: connections.handle,
+				displayName: connections.displayName,
+				avatarUrl: connections.avatarUrl,
+				status: connections.status
+			})
+			.from(connections)
+			.where(eq(connections.userId, userId))
+	])) as [TargetRow[], ConnectionRow[]];
+	const hasMore = allTargets.length > limit;
+	const targetRows = hasMore ? allTargets.slice(0, limit) : allTargets;
+	const connectionById = new Map(ownedConnections.map((connection) => [connection.id, connection]));
+	const draftIds = [...new Set(targetRows.map((target) => target.draftId))];
+	const draftRows: DraftLite[] = [];
+	for (const chunk of chunkIds(draftIds))
+		draftRows.push(
+			...(await ctx.db
+				.select({
+					id: drafts.id,
+					title: drafts.title,
+					baseBody: drafts.baseBody,
+					status: drafts.status
+				})
+				.from(drafts)
+				.where(and(eq(drafts.userId, userId), inArray(drafts.id, chunk))))
+		);
+	const draftById = new Map(draftRows.map((draft) => [draft.id, draft]));
+	const mediaRows: InferSelectModel<typeof draftMedia>[] = [];
+	for (const chunk of chunkIds(draftIds.filter((id) => draftById.has(id))))
+		mediaRows.push(
+			...(await ctx.db.select().from(draftMedia).where(inArray(draftMedia.draftId, chunk)))
+		);
+	const mediaByDraft = new Map<string, ReturnType<typeof serializeMedia>[]>();
+	for (const media of mediaRows) {
+		if (!draftById.has(media.draftId)) continue;
+		const values = mediaByDraft.get(media.draftId) ?? [];
+		values.push(serializeMedia(media));
+		mediaByDraft.set(media.draftId, values);
+	}
+	for (const values of mediaByDraft.values())
+		values.sort(
+			(a, b) => (a.segmentIndex ?? 0) - (b.segmentIndex ?? 0) || a.sortOrder - b.sortOrder
+		);
+	const targets = [];
+	for (const target of targetRows) {
+		const connection = connectionById.get(target.connectionId);
+		const draft = draftById.get(target.draftId);
+		if (!connection || !draft || (connection.status === 'disconnected' && !target.remotePostId))
+			continue;
+		targets.push({
+			id: target.id,
+			status: target.status,
+			scheduledFor: target.scheduledFor,
+			updatedAt: target.updatedAt,
+			remoteUrl: target.remoteUrl,
+			errorMessage: target.errorMessage,
+			draft: { ...draft, media: mediaByDraft.get(draft.id) ?? [] },
+			connection: {
+				id: connection.id,
+				platform: connection.platform,
+				handle: connection.handle,
+				displayName: connection.displayName,
+				avatarUrl: connection.avatarUrl,
+				status: connection.status
+			}
+		});
+	}
+	return { targets, hasMore };
 }

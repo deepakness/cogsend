@@ -35,6 +35,7 @@ import { securityHeadersFor } from '$lib/server/security-headers';
 import { isPinnedAppUrl } from '$lib/domain/app-url';
 import { readStoredAppUrl, rememberAppUrl } from '$lib/server/app-settings';
 import { verifyTickToken } from '$lib/server/tick-token';
+import { authorizeMcpRequest } from '$lib/server/mcp-auth';
 import {
 	isRateLimitedPath,
 	rateLimitKey,
@@ -86,7 +87,7 @@ let warnedMissingMedia = false;
 export const handle: Handle = async ({ event, resolve }) => {
 	const path = event.url.pathname;
 	const secureRequest = event.url.protocol === 'https:';
-	if (event.request.method === 'OPTIONS' && path.startsWith('/api/')) {
+	if (event.request.method === 'OPTIONS' && path.startsWith('/api/') && path !== '/api/mcp') {
 		// Same-origin app: no CORS preflight needed. Bare 204 (no
 		// Access-Control-* headers) so browsers default-deny cross-origin reads.
 		return new Response(null, { status: 204 });
@@ -116,6 +117,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	const storedAppUrl = isPinnedAppUrl(configuredAppUrl) ? undefined : await readStoredAppUrl(db);
 	let appEnv: AppEnv;
 	try {
+		// SAFETY: Cloudflare supplies platform env as bindings; envFromPlatform reads only its named fields.
 		appEnv = await envFromPlatform(platformEnv as unknown as Record<string, unknown>, {
 			requestUrl: event.url.href,
 			storedAppUrl
@@ -172,6 +174,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 		: null;
 
 	event.locals.authMethod = null;
+	event.locals.authCredential = null;
 	event.locals.apiKeyScopes = null;
 	const raw = event.cookies.get(SESSION_COOKIE);
 	const bearer = extractBearerToken(event.request.headers);
@@ -188,7 +191,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	const session = await getSessionUser(db, appEnv, raw);
 	event.locals.user = session?.user ?? null;
-	if (session?.user) event.locals.authMethod = 'session';
+	if (session?.user) {
+		event.locals.authMethod = 'session';
+		event.locals.authCredential = 'session';
+	}
 	if (session?.slideMaxAge && raw) {
 		event.cookies.set(SESSION_COOKIE, raw, {
 			path: '/',
@@ -205,19 +211,24 @@ export const handle: Handle = async ({ event, resolve }) => {
 		if (row) {
 			event.locals.user = asMachineUser(row);
 			event.locals.authMethod = 'bearer';
+			event.locals.authCredential = 'api_token';
 		}
-	} else if (!event.locals.user) {
+	} else if (!event.locals.user || path === '/api/mcp') {
 		// Personal API key: `Authorization: Bearer cog_…` or the `X-API-Key`
-		// header (never query strings — they leak into logs). Cookie sessions
-		// win when both are present. Format-gated before any hashing or D1
-		// query; only active (non-revoked) hashes verify.
+		// header (never query strings — they leak into logs). Ordinary routes
+		// preserve session precedence; MCP resolves its bearer key independently.
+		// Format-gated before any hashing or D1 query; only active hashes verify.
 		const apiKeyHeader = event.request.headers.get('x-api-key')?.trim() || null;
 		const candidate =
-			apiKeyHeader && apiKeyHeader.length > 0
-				? apiKeyHeader
-				: isApiKeyFormat(bearer)
+			path === '/api/mcp'
+				? isApiKeyFormat(bearer)
 					? bearer
-					: null;
+					: null
+				: apiKeyHeader && apiKeyHeader.length > 0
+					? apiKeyHeader
+					: isApiKeyFormat(bearer)
+						? bearer
+						: null;
 		if (isApiKeyFormat(candidate)) {
 			const verified = await verifyApiKey(db, candidate);
 			const userRow =
@@ -229,6 +240,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 			if (verified && userRow) {
 				event.locals.user = asMachineUser(userRow);
 				event.locals.authMethod = 'bearer';
+				event.locals.authCredential = 'personal_api_key';
 				event.locals.apiKeyScopes = verified.scopes;
 				const touch = touchApiKey(db, verified.keyId);
 				try {
@@ -269,6 +281,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	// route runs, because the point is to keep a burst from reaching PBKDF2 at
 	// all. The in-app lockout is still what stops a determined attacker.
 	if (isRateLimitedPath(path)) {
+		// SAFETY: AUTH_RATE_LIMITER is an optional Worker binding, read by the rate-limit adapter.
 		const problem = await rateLimitProblem(
 			(platformEnv as unknown as Record<string, unknown>).AUTH_RATE_LIMITER as
 				RateLimiter | undefined,
@@ -300,6 +313,28 @@ export const handle: Handle = async ({ event, resolve }) => {
 			anySecretMatches(bearer, [appEnv.SCHEDULER_SECRET, appEnv.API_TOKEN]) ||
 			(tickPath && (await verifyTickToken(db, bearer)));
 		if (authorized) return withPageSecurity(path, await resolve(event), secureRequest);
+	}
+
+	if (path === '/api/mcp') {
+		const authorization = await authorizeMcpRequest(event.request, event.url, db, {
+			authMethod: event.locals.authMethod,
+			authCredential: event.locals.authCredential,
+			user: event.locals.user
+		});
+		if (!authorization.ok) {
+			const headers = new Headers({ 'content-type': 'application/json' });
+			if (authorization.status === 401) headers.set('WWW-Authenticate', 'Bearer');
+			return withPageSecurity(
+				path,
+				new Response(
+					JSON.stringify({
+						error: authorization.status === 401 ? 'Unauthorized' : 'Origin mismatch'
+					}),
+					{ status: authorization.status, headers }
+				),
+				secureRequest
+			);
+		}
 	}
 
 	// Dev convenience: SKIP_TOTP (honored for localhost APP_URLs only) treats

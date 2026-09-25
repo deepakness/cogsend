@@ -31,6 +31,29 @@ curl ${origin}/api/drafts/$DRAFT/publish \\
 			title: 'Check the queue',
 			code: `curl ${origin}/api/queue \\
   -H "Authorization: Bearer $COGSEND_API_KEY"`
+		},
+		{
+			title: 'MCP Inspector CLI (list tools)',
+			code: `: "\${COGSEND_API_KEY:?Load it from a secret manager}"\nnpx @modelcontextprotocol/inspector --cli \\
+  "${origin}/api/mcp" \\
+  --transport http \\
+  --protocol-era modern \\
+  --method tools/list \\
+  --header "Authorization: Bearer $COGSEND_API_KEY"`
+		},
+		{
+			title: 'Generic MCP client configuration template',
+			code: `{
+  "mcpServers": {
+    "cogsend": {
+      "type": "http",
+      "url": "${origin}/api/mcp",
+      "headers": {
+        "Authorization": "Bearer $COGSEND_API_KEY"
+      }
+    }
+  }
+}`
 		}
 	];
 
@@ -51,8 +74,8 @@ curl ${origin}/api/drafts/$DRAFT/publish \\
 	<div class="mb-12">
 		<h1 class="text-3xl font-bold tracking-tight text-stone-900">API Documentation</h1>
 		<p class="mt-4 text-[15px] leading-relaxed text-stone-600">
-			Manage drafts, upload media, publish posts, schedule deliveries, and read queue status using
-			your personal API key. You can generate or revoke your key in
+			Use your personal API key for REST API requests or connect an MCP client to the stateless
+			Streamable HTTP endpoint at <code>/api/mcp</code>. Generate or revoke your key in
 			<a
 				href="/settings"
 				class="font-medium text-stone-900 underline underline-offset-4 hover:text-stone-600"
@@ -102,15 +125,16 @@ curl ${origin}/api/drafts/$DRAFT/publish \\
 					a secure browser session.
 				</li>
 				<li>
-					<strong class="font-medium text-stone-900">Scopes:</strong> Keys carry
-					<code class="rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[13px]">read</code>
-					and/or
-					<code class="rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[13px]">write</code>
-					scopes (<code class="rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[13px]">write</code
-					>
-					implies
-					<code class="rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[13px]">read</code>). A
-					read-only key gets 403 on publishes, schedules, and edits.
+					<strong class="font-medium text-stone-900">Scopes:</strong> Choose
+					<strong>Read-only</strong> or <strong>Read + write</strong> when generating or replacing a key;
+					Read + write is the default and includes read access. A read-only key can use MCP's connection,
+					draft, validation, and queue tools; write tools require Read + write. The detailed MCP tool
+					map is below.
+				</li>
+				<li>
+					<strong class="font-medium text-stone-900">Key lifecycle:</strong> Only one personal key is
+					active at a time. The raw key is shown once and only its hash is stored. Generating a replacement
+					immediately revokes the previous key.
 				</li>
 				<li>
 					<strong class="font-medium text-stone-900">Errors:</strong> Failed requests return a JSON
@@ -133,6 +157,10 @@ curl ${origin}/api/drafts/$DRAFT/publish \\
 		<section>
 			<h2 class="mb-6 text-xl font-bold tracking-tight text-stone-900">Endpoints</h2>
 			<dl class="space-y-3 font-mono text-[13px] text-stone-600">
+				<div class="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-4">
+					<dt class="shrink-0 font-semibold text-stone-900 sm:w-[280px]">POST /api/mcp</dt>
+					<dd>stateless Streamable HTTP MCP endpoint; personal bearer key required</dd>
+				</div>
 				<div class="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-4">
 					<dt class="shrink-0 font-semibold text-stone-900 sm:w-[280px]">GET /api/drafts</dt>
 					<dd>list drafts with variants, media, targets</dd>
@@ -194,6 +222,91 @@ curl ${origin}/api/drafts/$DRAFT/publish \\
 					<dd>account ids, platforms, statuses, and which platforms this deployment can connect</dd>
 				</div>
 			</dl>
+		</section>
+
+		<section aria-labelledby="mcp-server-heading">
+			<h2 id="mcp-server-heading" class="mb-4 text-xl font-bold tracking-tight text-stone-900">
+				MCP server
+			</h2>
+			<p class="mb-4 text-[15px] leading-relaxed text-stone-600">
+				Connect to <code class="rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[13px]"
+					>{origin}/api/mcp</code
+				>
+				using Streamable HTTP. Send an active personal key in
+				<code class="rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[13px]"
+					>Authorization: Bearer …</code
+				>
+				on every request. MCP does not accept cookies, <code>X-API-Key</code>, the legacy
+				<code>API_TOKEN</code>, scheduler credentials, or query-string credentials. Requests are
+				stateless JSON. Tool results include text summaries and structured data; GET and DELETE
+				return 405. If Cloudflare Access protects the instance with Service Auth, also send
+				<code>CF-Access-Client-Id</code>
+				and
+				<code>CF-Access-Client-Secret</code> using locally stored environment values. The Access guide
+				covers the policy choice for clients that cannot send these headers.
+			</p>
+			<p class="mb-3 text-[15px] leading-relaxed text-stone-600">
+				<strong class="font-medium text-stone-900">Read scope:</strong>
+				<code>list_connections</code>, <code>list_drafts</code>, <code>get_draft</code>,
+				<code>validate_post</code>, <code>list_queue</code>.
+			</p>
+			<p class="mb-4 text-[15px] leading-relaxed text-stone-600">
+				<strong class="font-medium text-stone-900">Write scope:</strong>
+				<code>create_draft</code>, <code>update_draft</code>, <code>duplicate_draft</code>,
+				<code>delete_draft</code>, <code>set_draft_variant</code>,
+				<code>delete_draft_variant</code>,
+				<code>publish_draft</code>, <code>schedule_draft</code>, <code>cancel_delivery</code>,
+				<code>retry_delivery</code>, <code>reschedule_delivery</code>. Write includes read.
+			</p>
+			<p class="mb-4 text-[14px] leading-relaxed text-stone-600">
+				The tools annotated as destructive are <code>update_draft</code>,
+				<code>set_draft_variant</code>, <code>delete_draft</code>,
+				<code>delete_draft_variant</code>,
+				<code>publish_draft</code>, <code>schedule_draft</code>, <code>cancel_delivery</code>,
+				<code>retry_delivery</code>, and <code>reschedule_delivery</code>.
+				<code>publish_draft</code>
+				and
+				<code>retry_delivery</code> are also open-world operations. Verify content, destination, and timing
+				before approving publish, retry, schedule, or reschedule.
+			</p>
+			<div class="mb-6 rounded-xl border border-amber-200/70 bg-amber-50/60 p-4">
+				<p class="text-[14px] leading-relaxed text-amber-950">
+					Use an MCP client that asks you to approve destructive and open-world actions. Review
+					content and destination before <code>publish_draft</code> or <code>retry_delivery</code>,
+					which can post to external services. Tool annotations are hints, not authorization or
+					enforced consent; CogSend has no server-side preview/commit step in v1.
+				</p>
+				<p class="mt-2 text-[14px] leading-relaxed text-amber-950">
+					MCP v1 does not expose media operations, settings, insights, account/provider management,
+					key management, scheduler administration, the internal publish endpoint, arbitrary HTTP
+					requests, prompts, resources, or sampling. The current SDK revision does not implement MCP <code
+						>ping</code
+					>; a ping can return JSON-RPC
+					<code>-32601</code> / HTTP 404.
+				</p>
+			</div>
+			<h3 class="mb-2 text-[15px] font-semibold text-stone-900">Try it with MCP Inspector</h3>
+			<ol class="mb-4 list-decimal space-y-2 pl-5 text-[14px] leading-relaxed text-stone-600">
+				<li>
+					Generate a Read-only or Read + write key in Settings and copy it while it is shown once.
+				</li>
+				<li>
+					Run <code>npx @modelcontextprotocol/inspector</code> to open the official Inspector.
+				</li>
+				<li>
+					Choose Streamable HTTP, enter the endpoint above, and configure the Authorization header
+					with your key. Connect and try <code>list_connections</code>.
+				</li>
+				<li>
+					Review the arguments before invoking destructive or open-world tools; configure agent
+					clients to require your approval.
+				</li>
+			</ol>
+			<p class="text-[13px] leading-relaxed text-stone-500">
+				The copyable CLI example below uses shell expansion for <code>$COGSEND_API_KEY</code>. The
+				generic configuration is a template: client-specific variable interpolation is not
+				guaranteed. Never commit a real key.
+			</p>
 		</section>
 
 		<section>

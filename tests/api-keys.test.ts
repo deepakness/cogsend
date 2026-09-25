@@ -141,6 +141,29 @@ describe('api keys', () => {
 		expect(fallback.scopes).toEqual(['read', 'write']);
 	});
 
+	it('replaces the active key sequentially with the selected scopes', async () => {
+		const create = (scopes: string[]) =>
+			keyPOST({
+				request: new Request('http://localhost/api/key', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ scopes })
+				}),
+				locals: sessionLocals(db, userId)
+			} as never) as Promise<Response>;
+		const firstResponse = await create(['read']);
+		const first = (await firstResponse.json()) as { key: string; scopes: string[] };
+		expect(first.scopes).toEqual(['read']);
+		const secondResponse = await create(['read', 'write']);
+		const second = (await secondResponse.json()) as { key: string; scopes: string[] };
+		expect(second.scopes).toEqual(['read', 'write']);
+		expect(await verifyApiKey(db, first.key)).toBeNull();
+		expect(await verifyApiKey(db, second.key)).toMatchObject({
+			userId,
+			scopes: ['read', 'write']
+		});
+	});
+
 	it('rejects a malformed body instead of minting a full-access key', async () => {
 		const before = (await keyGET({ locals: sessionLocals(db, userId) } as never)) as Response;
 		const activeBefore = ((await before.json()) as { active: { prefix: string } | null }).active;

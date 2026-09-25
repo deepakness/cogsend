@@ -42,7 +42,7 @@ Hosted schedulers usually charge per channel and keep your posts and tokens on t
 - **Insights**: published against failed over 7, 30 or 90 days, and why posts failed
 - **Link previews**: cards for URLs in a post
 - **Secure by default**: encrypted credentials and 2FA on the admin account
-- **API access**: a personal key for scripts and Shortcuts
+- **API access**: a personal key for scripts, Shortcuts and MCP clients (`/api/mcp`)
 
 ## What it costs
 
@@ -83,7 +83,7 @@ Also published, with search, at [cogsend.com/docs](https://cogsend.com/docs/).
 
 - [Writing and publishing](docs/composer.md): threads, per-platform overrides, images and alt text, scheduling
 - [Posts and Insights](docs/posts.md): the queue, what each post can do, and the delivery stats
-- [API](docs/api.md): personal API keys and worked examples (the full reference is in-app at `/api`)
+- [API](docs/api.md): personal API keys, the MCP server, and worked examples (the full reference is in-app at `/api`)
 
 **Run it**
 

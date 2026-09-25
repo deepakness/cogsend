@@ -14,9 +14,11 @@ Bundled into the Worker
 
 Apache-2.0             1 package
 ISC                    1 package
-MIT                    10 packages
+MIT                    12 packages
 
 - @lucide/svelte 1.45.0 — ISC — https://github.com/lucide-icons/lucide
+- @modelcontextprotocol/core 2.0.0 — MIT — https://github.com/modelcontextprotocol/typescript-sdk
+- @modelcontextprotocol/server 2.0.0 — MIT — https://github.com/modelcontextprotocol/typescript-sdk
 - @sveltejs/kit 2.70.3 — MIT — https://github.com/sveltejs/kit
 - clsx 2.1.1 — MIT — https://github.com/lukeed/clsx
 - cookie 0.6.0 — MIT — https://github.com/jshttp/cookie
@@ -33,11 +35,12 @@ Build and test tooling (not distributed)
 -----------------------------------------
 
 Apache-2.0             2 packages
-MIT                    18 packages
+MIT                    19 packages
 MIT OR Apache-2.0      1 package
 
 - @eslint/js 10.0.1 — MIT — https://github.com/eslint/eslint
 - @libsql/client 0.18.0 — MIT — https://github.com/tursodatabase/libsql-client-ts
+- @modelcontextprotocol/client 2.0.0 — MIT — https://github.com/modelcontextprotocol/typescript-sdk
 - @playwright/test 1.63.0 — Apache-2.0 — https://github.com/microsoft/playwright
 - @sveltejs/adapter-cloudflare 7.2.9 — MIT — https://github.com/sveltejs/kit
 - @sveltejs/vite-plugin-svelte 7.3.0 — MIT — https://github.com/sveltejs/vite-plugin-svelte
