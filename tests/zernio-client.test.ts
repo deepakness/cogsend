@@ -154,6 +154,36 @@ describe('zernio client', () => {
 		expect(readOnly.status).toBe(403);
 	});
 
+	it('treats an account Zernio has disconnected as a dead credential, not a key problem', () => {
+		// Found live: the reply is a 403, and the key hint sent the reader to the
+		// wrong place while the row stayed "active".
+		const err = zernioHttpError(
+			'create post',
+			403,
+			JSON.stringify({
+				error:
+					'Account 696e (bluesky "me.bsky.social") is disconnected and cannot be posted to. The platform token expired or was revoked. Please reconnect the account.',
+				code: 'ACCOUNT_DISCONNECTED'
+			})
+		);
+		expect(err.code).toBe('auth');
+		expect(err.message).toMatch(/reconnect/i);
+		expect(err.message).not.toMatch(/read-only|publishing group/i);
+		const other = zernioHttpError(
+			'create post',
+			403,
+			JSON.stringify({ error: 'One or more accounts do not belong to this user' })
+		);
+		expect(other.code).toBe('forbidden');
+		expect(other.message).not.toMatch(/read-only|publishing group/i);
+		const scoped = zernioHttpError(
+			'create post',
+			403,
+			JSON.stringify({ error: 'This key cannot publish', code: 'insufficient_permissions' })
+		);
+		expect(scoped.message).toMatch(/publishing group/);
+	});
+
 	it('adopts the post id of an idempotent 202 (still saving) instead of failing', async () => {
 		const fetchImpl = mockFetch({
 			'/v1/posts': () =>

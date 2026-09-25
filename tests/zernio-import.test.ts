@@ -45,6 +45,20 @@ describe('zernio import', () => {
 	});
 	afterAll(() => close());
 
+	it('reads an inactive Zernio account as needing a reconnect, on import too', async () => {
+		expect(
+			toImportable(account({ _id: 'acc-off', isActive: false }), new Set())?.needsReconnection
+		).toBe(true);
+		const row = await upsertZernioConnection({
+			db,
+			env: TEST_ENV,
+			userId,
+			apiKey: 'zk_1',
+			account: account({ _id: 'acc-off', platform: 'bluesky', isActive: false })
+		});
+		expect(row.status).toBe('expired');
+	});
+
 	it('describes an account for the dialog and drops what CogSend cannot post to', () => {
 		const imported = new Set(['acc-9']);
 		expect(toImportable(account(), imported)).toEqual({

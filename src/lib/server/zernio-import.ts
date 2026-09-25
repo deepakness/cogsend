@@ -7,7 +7,12 @@ import { connections } from './db/schema';
 import type { AppEnv } from './env';
 import { fail } from './http';
 import { ProviderError, type ConnectionCredentials } from './providers/types';
-import { zernioApiMessage, zernioProfileId, type ZernioAccount } from './zernio';
+import {
+	isZernioAccountDead,
+	zernioApiMessage,
+	zernioProfileId,
+	type ZernioAccount
+} from './zernio';
 
 export interface ImportableAccount {
 	id: string;
@@ -39,7 +44,7 @@ export function toImportable(
 		handle,
 		displayName: account.displayName?.trim() || handle,
 		avatarUrl: account.profilePicture || null,
-		needsReconnection: account.needsReconnection === true,
+		needsReconnection: isZernioAccountDead(account),
 		imported: importedIds.has(account._id)
 	};
 }
@@ -115,7 +120,7 @@ export async function upsertZernioConnection(opts: {
 			zernioAccountId: account._id,
 			zernioProfileId: zernioProfileId(account)
 		}),
-		status: account.needsReconnection ? 'expired' : 'active',
+		status: isZernioAccountDead(account) ? 'expired' : 'active',
 		updatedAt: now
 	};
 	// Only rows that are already Zernio-backed are candidates, matched on the

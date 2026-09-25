@@ -16,7 +16,7 @@ import {
 } from '$lib/server/providers';
 import { sanitizeMastodonInstanceUrl } from '$lib/server/providers/mastodon';
 import { requireSession } from '$lib/server/require';
-import { listAccounts } from '$lib/server/zernio';
+import { isZernioAccountDead, listAccounts } from '$lib/server/zernio';
 
 export const POST: RequestHandler = async ({ params, locals }) => {
 	const { id } = params;
@@ -78,7 +78,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 				// Transient (429/5xx/network): keep the status, like Mastodon.
 				return fail('Zernio verify temporarily unavailable', 502);
 			}
-			if (!account || account.needsReconnection) {
+			if (!account || isZernioAccountDead(account)) {
 				await locals.db
 					.update(connections)
 					.set({ status: 'expired', updatedAt: new Date() })

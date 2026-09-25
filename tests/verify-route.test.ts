@@ -195,6 +195,17 @@ describe('POST /api/connections/[id]/verify — session only, gate before write'
 			expect(row.handle).toBe('acme2');
 		});
 
+		it('expires the row when Zernio lists the account as inactive', async () => {
+			const id = await zernioRow('active');
+			stub(() =>
+				Response.json({
+					accounts: [{ _id: 'acc-1', platform: 'twitter', profileId: 'p1', isActive: false }]
+				})
+			);
+			expect((await verify(id)).status).toBe(401);
+			expect((await statusOf(id)).status).toBe('expired');
+		});
+
 		it('expires the row and says where to reconnect when Zernio reports the token dead', async () => {
 			const id = await zernioRow('active');
 			stub(() =>

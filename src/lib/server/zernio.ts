@@ -54,6 +54,23 @@ function apiMessageFrom(body: string): string | null {
 	}
 }
 
+function apiCodeFrom(body: string): string | null {
+	try {
+		const parsed = JSON.parse(body) as { code?: unknown };
+		return typeof parsed.code === 'string' ? parsed.code : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Zernio no longer holds a live token for the account: reconnecting it there is the fix. */
+export function isZernioAccountDead(account: {
+	needsReconnection?: boolean;
+	isActive?: boolean;
+}): boolean {
+	return account.needsReconnection === true || account.isActive === false;
+}
+
 /**
  * 401 is the key: expire the connection. 429 and 5xx come back later. Every
  * other 4xx (validation, the billing gate, a missing permission, the 24-hour
@@ -95,8 +112,15 @@ export function zernioHttpError(prefix: string, status: number, body: string): P
 		);
 	}
 	if (status === 403) {
+		const code = apiCodeFrom(body);
+		if (code === 'ACCOUNT_DISCONNECTED') {
+			return new ProviderError(`Zernio: ${reason}`, { status, code: 'auth', detail });
+		}
+		const keyProblem = code === 'insufficient_permissions' || /read-only/i.test(reason);
 		return new ProviderError(
-			`Zernio refused this request: ${reason}. The API key may be read-only or lack the publishing group`,
+			keyProblem
+				? `Zernio refused this request: ${reason}. The API key may be read-only or lack the publishing group`
+				: `Zernio refused this request: ${reason}`,
 			{ status, code: 'forbidden', detail }
 		);
 	}
