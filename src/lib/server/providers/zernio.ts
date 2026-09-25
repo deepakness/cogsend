@@ -12,12 +12,52 @@ import { providerFetch } from './timed-fetch';
 import {
 	ProviderError,
 	PublishPartialError,
+	type FetchLike,
 	type MediaAttachment,
 	type NormalizedPost,
 	type PlatformId,
 	type PlatformProvider,
 	type PublishResult
 } from './types';
+
+function existingPostIdFrom(err: ProviderError): string | null {
+	try {
+		const body = JSON.parse(err.detail ?? '') as { details?: { existingPostId?: unknown } };
+		const id = body.details?.existingPostId;
+		return typeof id === 'string' && id ? id : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * A create can outlive the request timeout (a Threads thread publishes inside
+ * the call) while Zernio carries on and posts it. Zernio's duplicate check runs
+ * before its x-request-id replay, so the retry gets a 409 naming the post it
+ * already made. The request id in the post's metadata proves which 409s are
+ * ours to adopt; any other is a real duplicate.
+ */
+async function createOrAdopt(opts: {
+	apiKey: string;
+	body: Record<string, unknown>;
+	requestId: string;
+	fetchImpl: FetchLike;
+}): Promise<string> {
+	try {
+		return (await createPost(opts))._id;
+	} catch (err) {
+		if (!(err instanceof ProviderError) || err.status !== 409) throw err;
+		const existingId = existingPostIdFrom(err);
+		if (!existingId) throw err;
+		const existing = await getPost({
+			apiKey: opts.apiKey,
+			postId: existingId,
+			fetchImpl: opts.fetchImpl
+		});
+		if (existing.metadata?.cogsendRequestId !== opts.requestId) throw err;
+		return existingId;
+	}
+}
 
 export const ZERNIO_POLL_INTERVAL_MS = 3_000;
 export const ZERNIO_MAX_POLLS = 8;
@@ -146,13 +186,13 @@ export function zernioProviderFor(
 					content,
 					mediaUrlFor: publishOpts?.mediaUrlFor
 				});
-				// The same key on a retry makes Zernio replay the original post for
-				// five minutes, which covers a crash between the create and the
-				// checkpoint below. It also replays a genuinely failed post to the
-				// first retries; that costs an attempt, not a duplicate.
 				const requestId = zernioRequestId(publishOpts?.idempotencyKey?.(0) ?? crypto.randomUUID());
-				const created = await createPost({ apiKey, body, requestId, fetchImpl });
-				postId = created._id;
+				postId = await createOrAdopt({
+					apiKey,
+					body: { ...body, metadata: { cogsendRequestId: requestId } },
+					requestId,
+					fetchImpl
+				});
 				await publishOpts?.checkpoint?.({ segmentIds: [postId], remoteUrl: null });
 			}
 

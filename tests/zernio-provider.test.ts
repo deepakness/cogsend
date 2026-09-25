@@ -381,6 +381,89 @@ describe('zernioProviderFor: a dead resume point is cleared', () => {
 	});
 });
 
+describe('zernioProviderFor: a create whose answer was lost', () => {
+	// Found live: a Threads thread create outlived the request timeout, Zernio
+	// published it anyway, and the retry's 409 duplicate reported a live post as
+	// failed. Zernio's duplicate check runs before its x-request-id replay.
+	const duplicate = () =>
+		Response.json(
+			{
+				error:
+					'This exact content is already scheduled, publishing, or was posted to this account within the last 24 hours.',
+				details: { accountId: 'acc-1', platform: 'twitter', existingPostId: 'post-ours' }
+			},
+			{ status: 409 }
+		);
+	const existing = (cogsendRequestId: string) => () =>
+		Response.json({
+			post: {
+				_id: 'post-ours',
+				metadata: { cogsendRequestId, usageCounted: true },
+				platforms: [
+					{
+						platform: 'twitter',
+						accountId: 'acc-1',
+						status: 'published',
+						platformPostId: '77',
+						platformPostUrl: 'https://x.com/u/status/77'
+					}
+				]
+			}
+		});
+
+	it('tags every create with the request id, so the post can be recognised later', async () => {
+		const seen: Request[] = [];
+		const fetchImpl = mockFetch(
+			{
+				'/v1/posts/p': existing('target-9-0'),
+				'/v1/posts': () => Response.json({ post: { _id: 'p', platforms: [] } })
+			},
+			seen
+		);
+		await zernioProviderFor('x', fast).publish({ text: 'hi' }, creds, undefined, fetchImpl, {
+			mediaUrlFor,
+			idempotencyKey: (i) => `target-9:${i}`
+		});
+		expect(((await seen[0].json()) as { metadata?: unknown }).metadata).toEqual({
+			cogsendRequestId: 'target-9-0'
+		});
+	});
+
+	it('adopts its own post from a duplicate 409 and polls it', async () => {
+		const checkpoints: unknown[] = [];
+		const result = await zernioProviderFor('x', fast).publish(
+			{ text: 'hi' },
+			creds,
+			undefined,
+			mockFetch({ '/v1/posts/post-ours': existing('target-9-0'), '/v1/posts': duplicate }),
+			{
+				mediaUrlFor,
+				idempotencyKey: (i) => `target-9:${i}`,
+				checkpoint: (s) => {
+					checkpoints.push(s);
+				}
+			}
+		);
+		expect(checkpoints[0]).toEqual({ segmentIds: ['post-ours'], remoteUrl: null });
+		expect(result.remotePostId).toBe('77');
+	});
+
+	it('still refuses a real duplicate: someone else’s post with the same text', async () => {
+		const err = await zernioProviderFor('x', fast)
+			.publish(
+				{ text: 'hi' },
+				creds,
+				undefined,
+				mockFetch({ '/v1/posts/post-ours': existing('another-target-0'), '/v1/posts': duplicate }),
+				{ mediaUrlFor, idempotencyKey: (i) => `target-9:${i}` }
+			)
+			.catch((e) => e);
+		expect(err).toBeInstanceOf(ProviderError);
+		expect((err as ProviderError).message).toMatch(/24 hours/);
+		expect((err as ProviderError).retryable).toBe(false);
+	});
+});
+
 describe('providerFor', () => {
 	it('routes on the meta marker, not the platform column', () => {
 		expect(providerFor({ platform: 'x', metaJson: '{"provider":"zernio"}' })).toBe(

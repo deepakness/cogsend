@@ -34,6 +34,7 @@ export interface ZernioPlatformEntry {
 export interface ZernioPost {
 	_id: string;
 	status?: string;
+	metadata?: { cogsendRequestId?: string };
 	platforms?: ZernioPlatformEntry[];
 }
 
