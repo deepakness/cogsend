@@ -715,10 +715,11 @@ export async function publishTarget(
 				now,
 				partial,
 				errorDetail,
-				// A provider that checkpointed an empty segment list is saying the
-				// remote post it was resuming is dead: persist that so
-				// lastPartialResume stops offering it.
-				resumeReset: !partial && resumeState.last?.segmentIds.length === 0
+				// Whatever the provider last checkpointed survives a failure that is
+				// not partial: a remote post created before the error (Zernio creates,
+				// then polls) must be resumed, not created twice. An empty list is the
+				// provider saying that post is dead, so the retry starts fresh.
+				lastCheckpoint: resumeState.last
 			}
 		);
 		return { status: nextStatus, error: message };
@@ -803,7 +804,7 @@ async function markFailed(
 		now?: Date;
 		partial?: PublishPartialError | null;
 		errorDetail?: string | null;
-		resumeReset?: boolean;
+		lastCheckpoint?: PublishCheckpoint | null;
 	} = {}
 ): Promise<'scheduled' | 'failed' | 'published'> {
 	const now = opts.now ?? new Date();
@@ -855,8 +856,10 @@ async function markFailed(
 			summary.segmentIds = opts.partial.segmentIds;
 			summary.segmentCids = opts.partial.segmentCids;
 			summary.remoteUrl = opts.partial.remoteUrl ?? null;
-		} else if (opts.resumeReset) {
-			summary.segmentIds = [];
+		} else if (opts.lastCheckpoint) {
+			summary.segmentIds = opts.lastCheckpoint.segmentIds;
+			summary.segmentCids = opts.lastCheckpoint.segmentCids;
+			summary.remoteUrl = opts.lastCheckpoint.remoteUrl ?? null;
 		}
 		if (opts.errorDetail) summary.errorDetail = opts.errorDetail;
 		await db

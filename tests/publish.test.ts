@@ -1471,6 +1471,39 @@ describe('publish auth classification', () => {
 			expect(row.status).toBe('expired');
 		});
 
+		it('a poll that errors after the create keeps the post, so the retry polls instead of posting twice', async () => {
+			// Found live: a Threads thread outlived the poll window, one status read
+			// timed out, and the retry created a second post that Zernio refused as
+			// a duplicate, while the first one went live.
+			const conn = await zernioConnection();
+			const targetId = await target(conn);
+			const creates: Request[] = [];
+			const create = (req: Request) => {
+				creates.push(req);
+				return Response.json({ post: { _id: 'post-slow', platforms: [] } });
+			};
+			const timeout: FetchLike = async (input, init) => {
+				const url = String(input instanceof Request ? input.url : input);
+				if (url.includes('/v1/posts/post-slow')) {
+					throw Object.assign(new Error('Provider request timed out'), { status: 504 });
+				}
+				return mockFetch({ '/v1/posts': create })(input, init);
+			};
+			const first = await publishTarget(db, TEST_ENV, store, targetId, { fetchImpl: timeout });
+			expect(first.status).toBe('scheduled');
+			expect(creates).toHaveLength(1);
+
+			const second = await publishTarget(db, TEST_ENV, store, targetId, {
+				fetchImpl: mockFetch({
+					'/v1/posts/post-slow': () => publishedPost('post-slow'),
+					'/v1/posts': create
+				}),
+				now: new Date(Date.now() + 5 * 60_000)
+			});
+			expect(second.status).toBe('published');
+			expect(creates).toHaveLength(1);
+		});
+
 		it('a resume that finds Zernio failed lets the next attempt create a fresh post', async () => {
 			const conn = await zernioConnection();
 			const targetId = await target(conn);
