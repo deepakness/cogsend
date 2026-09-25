@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	DEFAULT_SCHEDULE_OFFSET,
 	defaultScheduleDatetime,
+	earliestFutureScheduleValue,
 	isFutureScheduleValue,
 	listSchedulePresets,
 	minScheduleDatetime,
@@ -156,5 +157,51 @@ describe('schedulePreviewText', () => {
 		expect(
 			schedulePreviewText(toDatetimeLocalValue(new Date(now.getTime() - 60_000)), now)
 		).toBeNull();
+	});
+});
+
+describe('earliestFutureScheduleValue', () => {
+	const now = new Date(2026, 7, 10, 12, 0, 0, 0);
+	const at = (h: number, m = 0, day = 10) => new Date(2026, 7, day, h, m, 0, 0);
+
+	it('returns the local date/time of a future target', () => {
+		expect(earliestFutureScheduleValue([{ scheduledFor: at(15, 30).toISOString() }], now)).toBe(
+			toDatetimeLocalValue(at(15, 30))
+		);
+	});
+
+	it('picks the earliest future time and skips past, missing, and malformed values', () => {
+		const targets = [
+			{ scheduledFor: at(18).toISOString() },
+			{ scheduledFor: at(9).toISOString() },
+			{ scheduledFor: null },
+			{},
+			{ scheduledFor: 'garbage' },
+			{ scheduledFor: at(14).getTime() },
+			{ scheduledFor: at(16).toISOString() }
+		];
+		expect(earliestFutureScheduleValue(targets, now)).toBe(toDatetimeLocalValue(at(14)));
+	});
+
+	it('round-trips a stored ISO instant exactly when confirmed unchanged', () => {
+		const stored = '2026-08-15T14:30:00.000Z';
+		const value = earliestFutureScheduleValue([{ scheduledFor: stored }], now)!;
+		expect(scheduleValueToIso(value, now)).toBe(stored);
+	});
+
+	it('returns null when every stored value is missing or malformed', () => {
+		expect(
+			earliestFutureScheduleValue(
+				[{ scheduledFor: 'not-a-date' }, { scheduledFor: null }, { scheduledFor: {} }, {}],
+				now
+			)
+		).toBeNull();
+	});
+
+	it('returns null when nothing is future', () => {
+		expect(earliestFutureScheduleValue([{ scheduledFor: at(9).toISOString() }], now)).toBeNull();
+		expect(earliestFutureScheduleValue([{ scheduledFor: now.toISOString() }], now)).toBeNull();
+		expect(earliestFutureScheduleValue([], now)).toBeNull();
+		expect(earliestFutureScheduleValue(undefined, now)).toBeNull();
 	});
 });

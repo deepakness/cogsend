@@ -61,6 +61,7 @@
 	import type { ProfileSettings } from '$lib/domain/profile-settings';
 	import {
 		DEFAULT_SCHEDULE_OFFSET,
+		earliestFutureScheduleValue,
 		isFutureScheduleValue,
 		minScheduleDatetime,
 		offsetToDHM,
@@ -129,7 +130,7 @@
 			optionsJson?: { visibility?: string; spoilerText?: string; poll?: unknown };
 		}>;
 		media?: MediaItem[];
-		targets?: Array<{ connectionId?: string | null }>;
+		targets?: Array<{ connectionId?: string | null; scheduledFor?: unknown }>;
 	};
 
 	let {
@@ -230,6 +231,16 @@
 	let scheduleOpen = $state(false);
 	let schedDate = $state('');
 	let schedTime = $state('');
+	// The loaded draft's existing schedule (datetime-local, earliest future
+	// target time) or null. openSchedule() starts from it instead of the
+	// fresh-post default while it is still in the future.
+	let loadedSchedule = $state<string | null>(
+		earliestFutureScheduleValue(seededDraft?.targets, new Date())
+	);
+	// Set when the user changes a schedule control. Kept apart from `dirty`
+	// (body/selection autosave) so a draft response landing mid-edit cannot
+	// replace a schedule the user already picked.
+	let scheduleTouched = $state(false);
 	// Snapshot on purpose: defaults apply to a fresh editor only.
 	let mastoVisibility = $state(seededVisibility);
 	let mastoCW = $state(seededCw);
@@ -627,6 +638,8 @@
 		activeTab = 'global';
 		focusedSegment = 0;
 		scheduleOpen = false;
+		loadedSchedule = null;
+		scheduleTouched = false;
 		isPostConfirmOpen = false;
 		pendingPublish = null;
 		publishProgress = null;
@@ -781,6 +794,16 @@
 				}
 			}
 			selectionTouched = false;
+
+			// Schedule: a first load keeps a schedule the user edited while the
+			// fetch was in flight; a draft switch applies the stored one wholesale.
+			if (before === null || !scheduleTouched) {
+				loadedSchedule = earliestFutureScheduleValue(d.targets, new Date());
+				scheduleTouched = false;
+				// The popover may already be open on the default; show the stored
+				// time in place. With nothing future stored the default stays.
+				if (scheduleOpen && loadedSchedule) applyLoadedSchedule(loadedSchedule);
+			}
 			if (mergedCleanly) {
 				dirty = false;
 				saveStatus = 'idle';
@@ -1314,8 +1337,28 @@
 	let relativeValue = $state('1');
 	let relativeUnit = $state<'hours' | 'days' | 'mins'>('hours');
 
+	function applyLoadedSchedule(value: string) {
+		scheduleMode = 'absolute';
+		schedDate = value.slice(0, 10);
+		schedTime = value.slice(11, 16);
+	}
+
 	function openSchedule() {
 		if (isPostConfirmOpen) dismissPostConfirm();
+		if (scheduleOpen) {
+			scheduleOpen = false;
+			return;
+		}
+		scheduleOpen = true;
+		if (scheduleTouched) {
+			// Reopen on the user's own pick; a relative offset is re-based on now.
+			if (scheduleMode === 'relative') applyRelativeFields();
+			return;
+		}
+		if (loadedSchedule && isFutureScheduleValue(loadedSchedule, new Date())) {
+			applyLoadedSchedule(loadedSchedule);
+			return;
+		}
 		scheduleMode = 'relative';
 
 		let defaultUnit: 'hours' | 'days' | 'mins';
@@ -1334,7 +1377,6 @@
 		relativeValue = defaultValue;
 
 		applyRelativeFields();
-		scheduleOpen = !scheduleOpen;
 	}
 
 	function applyRelativeFields() {
@@ -1411,6 +1453,9 @@
 			);
 			dirty = false;
 			scheduleOpen = false;
+			// The draft now carries this time; reopening should show it.
+			loadedSchedule = scheduleCombined;
+			scheduleTouched = false;
 		} catch (e) {
 			showToast(humanizeError(e instanceof Error ? e.message : 'Schedule failed'), 'error');
 		} finally {
@@ -2916,6 +2961,7 @@
 									: 'text-stone-500 hover:text-stone-900'}"
 								onclick={() => {
 									scheduleMode = 'relative';
+									scheduleTouched = true;
 									applyRelativeFields();
 								}}
 							>
@@ -2947,14 +2993,20 @@
 										data-testid="schedule-offset-value"
 										aria-label="Publish in amount"
 										bind:value={relativeValue}
-										oninput={applyRelativeFields}
+										oninput={() => {
+											scheduleTouched = true;
+											applyRelativeFields();
+										}}
 										class="w-20 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-center text-[13px] font-bold text-stone-900 transition-colors focus:border-stone-400 focus:bg-white focus:outline-none"
 									/>
 									<select
 										data-testid="schedule-offset-unit"
 										aria-label="Publish in unit"
 										bind:value={relativeUnit}
-										onchange={applyRelativeFields}
+										onchange={() => {
+											scheduleTouched = true;
+											applyRelativeFields();
+										}}
 										class="flex-1 appearance-none rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-[13px] font-bold text-stone-900 transition-colors focus:border-stone-400 focus:bg-white focus:outline-none"
 									>
 										<option value="mins">Minutes</option>
@@ -2974,6 +3026,7 @@
 											type="date"
 											data-testid="schedule-date"
 											bind:value={schedDate}
+											oninput={() => (scheduleTouched = true)}
 											min={minSchedDate}
 											aria-label="Schedule date"
 											class="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-[13px] font-bold text-stone-900 transition-colors focus:border-stone-400 focus:bg-white focus:outline-none"
@@ -2984,6 +3037,7 @@
 											type="time"
 											data-testid="schedule-time"
 											bind:value={schedTime}
+											oninput={() => (scheduleTouched = true)}
 											aria-label="Schedule time"
 											class="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-[13px] font-bold text-stone-900 transition-colors focus:border-stone-400 focus:bg-white focus:outline-none"
 										/>

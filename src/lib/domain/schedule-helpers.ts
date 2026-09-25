@@ -127,3 +127,29 @@ export function listSchedulePresets(): SchedulePreset[] {
 		{ id: 'tmr9', label: 'Tomorrow 9am', minutes: -1 }
 	];
 }
+
+/**
+ * The datetime-local value (browser local zone, minute precision) of the
+ * earliest future `scheduledFor` across a draft's publish targets, or null when
+ * none is future. Missing, malformed, and past values are skipped, so legacy
+ * rows with mixed target times still restore deterministically. A value inside
+ * the current minute counts as past: it would truncate to a non-future value.
+ */
+export function earliestFutureScheduleValue(
+	targets: ReadonlyArray<{ scheduledFor?: unknown }> | null | undefined,
+	now: Date = new Date()
+): string | null {
+	let best: { value: string; time: number } | null = null;
+	for (const t of targets ?? []) {
+		const raw = t?.scheduledFor;
+		if (raw === null || raw === undefined || raw === '') continue;
+		if (typeof raw !== 'string' && typeof raw !== 'number' && !(raw instanceof Date)) continue;
+		const date = new Date(raw);
+		if (Number.isNaN(date.getTime())) continue;
+		const value = toDatetimeLocalValue(date);
+		if (!isFutureScheduleValue(value, now)) continue;
+		const time = parseDatetimeLocal(value)!.getTime();
+		if (!best || time < best.time) best = { value, time };
+	}
+	return best?.value ?? null;
+}
