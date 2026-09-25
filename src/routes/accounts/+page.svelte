@@ -140,12 +140,6 @@
 			name: 'Bluesky',
 			description: 'Connect with handle + app password',
 			form: 'bluesky' as const
-		},
-		{
-			id: 'zernio',
-			name: 'Zernio',
-			description: 'Post through Zernio’s API, no developer app needed · paid service and sponsor',
-			form: 'zernio' as const
 		}
 	];
 
@@ -323,10 +317,11 @@
 		}
 	}
 
-	function openZernioForm() {
+	function openZernioForm(platform?: OAuthPlatformId) {
 		openConnectDialog();
 		modalForm = 'zernio';
 		zernioAccounts = null;
+		if (platform) zernioConnectPlatform = platform;
 		if (zernioHasStoredKey) void loadZernioAccounts();
 	}
 
@@ -339,10 +334,6 @@
 	function pickPlatform(id: string) {
 		const found = availablePlatforms.find((p) => p.id === id);
 		if (!found) return;
-		if (found.form === 'zernio') {
-			openZernioForm();
-			return;
-		}
 		if (found.form) {
 			modalForm = found.form;
 			return;
@@ -810,6 +801,19 @@
 							class="inline-block text-[13px] font-bold text-stone-900 underline"
 							>Full {platformName(setupPanel)} steps</a
 						>
+						<p
+							class="rounded-xl border border-dashed border-stone-300 px-3 py-2.5 text-xs font-medium text-stone-600"
+							data-testid="setup-zernio-callout"
+						>
+							Don't want to set up an app?
+							<button
+								type="button"
+								onclick={() => openZernioForm(setupPanel ?? undefined)}
+								class="font-bold text-stone-900 underline"
+								>Connect {platformName(setupPanel)} through Zernio</button
+							>
+							instead.{setupPanel === 'x' ? '' : ' Free plan available.'}
+						</p>
 					</div>
 				{/key}
 			{:else if modalForm === 'none'}
@@ -854,6 +858,35 @@
 						</button>
 					{/each}
 				</div>
+				<div class="my-5 flex items-center gap-3" aria-hidden="true">
+					<span class="h-px flex-1 bg-stone-200"></span>
+					<span class="text-[11px] font-bold tracking-widest text-stone-400 uppercase">or</span>
+					<span class="h-px flex-1 bg-stone-200"></span>
+				</div>
+				<button
+					type="button"
+					class="group flex w-full items-center justify-between gap-3 rounded-[1.5rem] border border-dashed border-stone-300 bg-stone-50/60 p-4 text-left transition-all hover:border-stone-400 hover:bg-white"
+					onclick={() => openZernioForm()}
+					data-testid="zernio-card"
+				>
+					<div class="flex items-center gap-4">
+						<span
+							class="flex h-12 w-12 items-center justify-center rounded-[1rem] bg-white text-stone-600 shadow-sm transition-colors group-hover:text-stone-900"
+						>
+							<Plug class="h-5 w-5" />
+						</span>
+						<div>
+							<h3 class="text-[15px] font-extrabold tracking-tight text-stone-900">
+								Connect through Zernio
+							</h3>
+							<p class="mt-0.5 text-[13px] font-medium text-stone-500">No developer apps needed</p>
+						</div>
+					</div>
+					<span
+						class="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-bold tracking-tight text-emerald-700"
+						>Free plan</span
+					>
+				</button>
 			{:else if modalForm === 'bluesky'}
 				<form onsubmit={connectBluesky} class="space-y-3">
 					<button
@@ -914,8 +947,8 @@
 					<h3 class="text-[17px] font-extrabold tracking-tight text-stone-900">Zernio</h3>
 					<p class="text-xs font-medium text-stone-500">
 						Zernio publishes with its own approved apps, so X, Threads, LinkedIn and Bluesky connect
-						without a developer app of your own. It is a paid service and a sponsor of CogSend;
-						posts still live and schedule here.
+						without a developer app of your own. It has a free plan (X needs a card), and posts
+						still live and schedule here.
 						<a
 							href={zernioLink({ placement: 'accounts-dialog' })}
 							target="_blank"

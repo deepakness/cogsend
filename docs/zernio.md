@@ -1,6 +1,6 @@
 # Connect through Zernio
 
-[Zernio](https://zernio.com/?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=provider-guide) is an optional, paid publishing provider and a sponsor of CogSend. It holds approved developer apps for X, Threads, LinkedIn and Bluesky, so an account connected through it publishes without an app of your own: no LinkedIn app review, no Meta app, no X developer project or API credits. CogSend still writes, schedules, retries and records everything; Zernio only carries the publish.
+[Zernio](https://zernio.com/?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=provider-guide) is an optional publishing provider with a free plan, and a sponsor of CogSend. It holds approved developer apps for X, Threads, LinkedIn and Bluesky, so an account connected through it publishes without an app of your own: no LinkedIn app review, no Meta app, no X developer project or API credits. CogSend still writes, schedules, retries and records everything; Zernio only carries the publish.
 
 Direct connections stay the default. Nothing here changes an account you connected with your own app, and the two kinds sit side by side on the Accounts page (Zernio-backed rows say **via Zernio**).
 

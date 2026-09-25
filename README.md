@@ -38,7 +38,7 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square"></a>
 </p>
 
-> **Supported by [Zernio](https://zernio.com/?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=readme-sponsor).** An optional paid provider that publishes to X, Threads, LinkedIn and Bluesky through Zernio's approved apps, so you skip registering your own. CogSend still runs the editor, schedule and history on your Cloudflare account. [Connect through Zernio](docs/zernio.md), or keep using your own apps.
+> **Supported by [Zernio](https://zernio.com/?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=readme-sponsor).** An optional provider (with a free plan) that publishes to X, Threads, LinkedIn and Bluesky through Zernio's approved apps, so you skip registering your own. CogSend still runs the editor, schedule and history on your Cloudflare account. [Connect through Zernio](docs/zernio.md), or keep using your own apps.
 
 https://github.com/user-attachments/assets/4e1e623b-e862-4f70-8b48-b764590834f5
 
