@@ -1,14 +1,13 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { expect, type Locator, type Page } from '@playwright/test';
 
 /**
  * Shared harness values for the e2e suite.
  *
- * The preview server (wrangler dev) reads `.dev.vars`, so the specs read the
- * same file for the values that live there (APP_ENCRYPTION_KEY, SKIP_TOTP). On a
- * fresh clone there is no `.dev.vars`: `npm run test:e2e` seeds one from
- * `tests/e2e/fixtures/dev.vars` (scripts/e2e-prepare.mjs) and this helper falls
- * back to that fixture, so the suite never depends on a particular machine.
+ * The preview server gets a dedicated fixture through Wrangler's `--env-file`
+ * flag, so the specs read the same file. A developer's `.dev.vars` is never
+ * consulted or changed. The TOTP suite can supply a temporary derivative via
+ * `COGSEND_E2E_VARS_FILE`.
  *
  * The login is not one of those values: the account is created in D1 before the
  * server starts, by `scripts/seed-local.mjs`, into the suite's own state
@@ -25,8 +24,10 @@ function parse(raw: string): Record<string, string> {
 	return out;
 }
 
+export const E2E_VARS_FILE = process.env.COGSEND_E2E_VARS_FILE || FIXTURE;
+
 export function e2eVars(): Record<string, string> {
-	return parse(readFileSync(existsSync('.dev.vars') ? '.dev.vars' : FIXTURE, 'utf8'));
+	return parse(readFileSync(E2E_VARS_FILE, 'utf8'));
 }
 
 /**
