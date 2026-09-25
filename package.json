@@ -38,7 +38,7 @@
 		"format": "prettier --write .",
 		"test:unit": "vitest",
 		"test": "vitest run",
-		"test:e2e": "node scripts/e2e-prepare.mjs && playwright test",
+		"test:e2e": "playwright test",
 		"test:e2e:totp": "node scripts/e2e-totp.mjs",
 		"setup": "node scripts/setup.mjs",
 		"admin:reset": "node scripts/admin-reset.mjs",
