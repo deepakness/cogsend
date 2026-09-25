@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { handleError } from '$lib/server/http';
+import { ApiOperationError } from '$lib/server/api/operation-error';
 import { captureConsole, loggedLines } from './console-spy';
 
 describe('handleError', () => {
@@ -15,6 +16,19 @@ describe('handleError', () => {
 		const res = handleError(Object.assign(new Error('Invalid code'), { status: 400 }));
 		expect(res.status).toBe(400);
 		expect(await res.json()).toEqual({ error: 'Invalid code' });
+	});
+
+	it('returns details from typed operation errors but not arbitrary errors', async () => {
+		const safe = handleError(
+			new ApiOperationError('Already publishing', 409, { inFlight: ['target-1'] })
+		);
+		expect(safe.status).toBe(409);
+		expect(await safe.json()).toEqual({ error: 'Already publishing', inFlight: ['target-1'] });
+
+		const untyped = handleError(
+			Object.assign(new Error('Conflict'), { status: 409, details: { secret: 'must not leak' } })
+		);
+		expect(await untyped.json()).toEqual({ error: 'Conflict' });
 	});
 
 	it('keeps the fixed copy for a failure it recognises', async () => {

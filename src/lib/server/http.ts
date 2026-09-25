@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { humanizedCause } from '$lib/domain/human-error';
+import { ApiOperationError } from '$lib/server/api/operation-error';
 
 export function ok(data: unknown, status = 200) {
 	return json(data, { status });
@@ -14,7 +15,10 @@ export function handleError(err: unknown) {
 	const message = err instanceof Error ? err.message : 'Server error';
 	if (status === 401)
 		return fail(message && message !== 'Server error' ? message : 'Unauthorized', 401);
-	if (status < 500) return fail(message, status >= 400 && status < 600 ? status : 400);
+	if (status < 500) {
+		const details = err instanceof ApiOperationError ? err.details : undefined;
+		return fail(message, status >= 400 && status < 600 ? status : 400, details);
+	}
 	console.error(err);
 	// 5xx messages are ours to log, not to publish: a driver error carries SQL
 	// and table detail, and an upstream one carries response bodies. The raw
