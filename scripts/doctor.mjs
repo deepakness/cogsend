@@ -504,15 +504,6 @@ function checkNode() {
 }
 
 /**
- * Whether the deployment has an account yet.
- *
- * `npm run setup` creates the account in D1 from the terminal, before the URL
- * answers its first request, so a deployment without one is not a live instance:
- * its login page shows a notice instead of a form, and only a terminal can fix
- * it. A deployment that has an account but no authenticator is simply one whose
- * owner has not signed in yet, which is worth a nudge rather than a failure.
- *
-/**
  * Which of the three platforms that need an app registered at the provider
  * (LinkedIn, Threads, X) this deployment could connect. Presence, not
  * validity: a wrong id still counts as set up and is rejected by the provider
@@ -555,6 +546,14 @@ export function platformVerdict(secretNames) {
 }
 
 /**
+ * Whether the deployment has an account yet.
+ *
+ * `npm run setup` creates the account in D1 from the terminal, before the URL
+ * answers its first request, so a deployment without one is not a live instance:
+ * its login page shows a notice instead of a form, and only a terminal can fix
+ * it. A deployment that has an account but no authenticator is simply one whose
+ * owner has not signed in yet, which is worth a nudge rather than a failure.
+ *
  * @param {{ created?: boolean, totpEnrolled?: boolean } | null} account
  * @returns {Check}
  */
@@ -583,8 +582,6 @@ export function accountVerdict(account) {
 	return { id: 'account', status: 'ok', label: 'Account created, authenticator enrolled' };
 }
 
-/**
- * Probe the running app. Returns the check *and* whatever version it reported,
 /**
  * Probe the running app. Returns the check *and* whatever version it reported,
  * so the update check can compare the deployed code rather than the checkout.
