@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { connections, users } from '$lib/server/db/schema';
 import { newId, type AppDb } from '$lib/server/db/client';
@@ -145,5 +145,92 @@ describe('POST /api/connections/[id]/verify — session only, gate before write'
 		expect(res.status).toBe(200);
 		expect((await statusOf(conn)).status).toBe('active');
 		vi.unstubAllGlobals();
+	});
+
+	describe('through Zernio', () => {
+		afterEach(() => vi.unstubAllGlobals());
+
+		async function zernioRow(status = 'expired') {
+			return addConnection(ownerId, {
+				platform: 'x',
+				handle: 'acme',
+				status,
+				credentialsEncrypted: await encryptJson(
+					{ zernioApiKey: 'zk_1', zernioAccountId: 'acc-1' },
+					TEST_ENV.APP_ENCRYPTION_KEY
+				),
+				metaJson: JSON.stringify({
+					provider: 'zernio',
+					zernioAccountId: 'acc-1',
+					zernioProfileId: 'p1'
+				})
+			});
+		}
+		const stub = (handler: (req: Request) => Response) =>
+			vi.stubGlobal(
+				'fetch',
+				vi.fn(async (input: unknown, init?: RequestInit) =>
+					handler(new Request(String(input), init))
+				)
+			);
+
+		it('marks the row active when Zernio still holds a live token', async () => {
+			const id = await zernioRow();
+			stub(() =>
+				Response.json({
+					accounts: [
+						{
+							_id: 'acc-1',
+							platform: 'twitter',
+							profileId: 'p1',
+							username: '@acme2',
+							displayName: 'Acme'
+						}
+					]
+				})
+			);
+			expect((await verify(id)).status).toBe(200);
+			const row = await statusOf(id);
+			expect(row.status).toBe('active');
+			expect(row.handle).toBe('acme2');
+		});
+
+		it('expires the row when Zernio lists the account as inactive', async () => {
+			const id = await zernioRow('active');
+			stub(() =>
+				Response.json({
+					accounts: [{ _id: 'acc-1', platform: 'twitter', profileId: 'p1', isActive: false }]
+				})
+			);
+			expect((await verify(id)).status).toBe(401);
+			expect((await statusOf(id)).status).toBe('expired');
+		});
+
+		it('expires the row and says where to reconnect when Zernio reports the token dead', async () => {
+			const id = await zernioRow('active');
+			stub(() =>
+				Response.json({
+					accounts: [
+						{ _id: 'acc-1', platform: 'twitter', profileId: 'p1', needsReconnection: true }
+					]
+				})
+			);
+			const res = await verify(id);
+			expect(res.status).toBe(401);
+			expect(((await res.json()) as { error: string }).error).toMatch(/reconnect .* in Zernio/i);
+			expect((await statusOf(id)).status).toBe('expired');
+		});
+
+		it('expires the row when the key itself is refused, and keeps it on a blip', async () => {
+			const id = await zernioRow('active');
+			stub(() => Response.json({ error: 'Invalid API key' }, { status: 401 }));
+			expect((await verify(id)).status).toBe(401);
+			expect((await statusOf(id)).status).toBe('expired');
+
+			const healthy = await zernioRow('active');
+			stub(() => new Response('down', { status: 503 }));
+			expect((await verify(healthy)).status).toBe(502);
+			expect((await statusOf(healthy)).status).toBe('active');
+		});
 	});
 });

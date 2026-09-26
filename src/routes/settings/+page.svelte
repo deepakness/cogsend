@@ -2,7 +2,7 @@
 	import { formatDistanceToNow } from 'date-fns';
 	import { onMount } from 'svelte';
 	import { goto, invalidateAll } from '$app/navigation';
-	import { Check, ChevronDown, Copy, Pencil, User } from '@lucide/svelte';
+	import { Check, Copy, Pencil, User } from '@lucide/svelte';
 	import AccountAvatar from '$lib/components/AccountAvatar.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import CopyButton from '$lib/components/CopyButton.svelte';
@@ -153,7 +153,7 @@
 	let keyJustRotated = $state(false);
 	let mcpCopied = $state<string | null>(null);
 	let mcpCopiedTimer: ReturnType<typeof setTimeout> | null = null;
-	let mcpClient = $state<'claude' | 'codex' | 'generic'>('claude');
+	let mcpClient = $state<'claude' | 'codex'>('claude');
 	const mcpUrl = $derived(tickOrigin ? `${tickOrigin}/api/mcp` : '/api/mcp');
 	const claudeMcpConfig = $derived(
 		JSON.stringify(
@@ -178,23 +178,6 @@
 			'default_tools_approval_mode = "prompt"'
 		].join('\n')
 	);
-	const genericMcpExample = $derived(
-		[
-			"import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';",
-			'',
-			'const apiKey = process.env.COGSEND_API_KEY;',
-			"if (!apiKey) throw new Error('Set COGSEND_API_KEY before running this example.');",
-			"const client = new Client({ name: 'my-agent', version: '1.0.0' });",
-			'const transport = new StreamableHTTPClientTransport(',
-			`  new URL('${mcpUrl}'),`,
-			'  { requestInit: { headers: { Authorization: `Bearer ${apiKey}` } } }',
-			');',
-			'await client.connect(transport);',
-			'const { tools } = await client.listTools();',
-			'console.log(tools.map(({ name }) => name));',
-			'await client.close();'
-		].join('\n')
-	);
 	const mcpClients = $derived([
 		{
 			id: 'claude' as const,
@@ -209,27 +192,8 @@
 			file: '~/.codex/config.toml',
 			what: 'config',
 			text: codexMcpConfig
-		},
-		{
-			id: 'generic' as const,
-			label: 'Generic client',
-			file: 'list-tools.mjs',
-			what: 'example',
-			text: genericMcpExample
 		}
 	]);
-	const claudeAccessHeaders = JSON.stringify(
-		{
-			headers: {
-				'CF-Access-Client-Id': '${CF_ACCESS_CLIENT_ID}',
-				'CF-Access-Client-Secret': '${CF_ACCESS_CLIENT_SECRET}'
-			}
-		},
-		null,
-		2
-	);
-	const codexAccessHeaders =
-		'env_http_headers = { "CF-Access-Client-Id" = "CF_ACCESS_CLIENT_ID", "CF-Access-Client-Secret" = "CF_ACCESS_CLIENT_SECRET" }';
 	// The form stays disabled until the first load resolves: applying slow
 	// fetch results over user edits (and then saving them) would silently
 	// reset their choices. `prefsLoaded` separates "the request finished" from
@@ -1226,7 +1190,7 @@
 					<div
 						role="tablist"
 						aria-label="MCP client"
-						class="grid grid-cols-3 gap-1 rounded-full bg-stone-100 p-1 sm:inline-grid"
+						class="grid grid-cols-2 gap-1 rounded-full bg-stone-100 p-1 sm:inline-grid"
 					>
 						{#each mcpClients as client (client.id)}
 							<button
@@ -1289,90 +1253,19 @@
 									Add this to <code class="font-mono text-stone-900">~/.codex/config.toml</code>.
 									Codex reads the bearer value from the named environment variable. The prompt
 									approval mode asks before tool calls.
-								{:else}
-									A Streamable HTTP MCP client must send
-									<code class="font-mono text-stone-900">Authorization: Bearer</code> on its
-									requests. Install
-									<code class="font-mono text-stone-900">@modelcontextprotocol/client</code>
-									and run this as a Node ESM script. Load
-									<code class="font-mono text-stone-900">COGSEND_API_KEY</code> from your secret manager
-									or process environment.
 								{/if}
 							</p>
 						</div>
 					{/each}
 				</div>
 
-				<div class="mt-6 rounded-xl border border-amber-200/70 bg-amber-50/60 p-4">
-					<h4 class="text-[13px] font-extrabold text-amber-950">Key and approval safety</h4>
-					<ul class="mt-2 list-disc space-y-1.5 pl-5 text-[12px] leading-relaxed text-amber-900">
-						<li>
-							Use Read-only unless the agent needs to create, change, or delete drafts; manage
-							deliveries; or publish. Read + write also grants read access.
-						</li>
-						<li>
-							This account has one active key. It is shown once; generating a replacement
-							immediately revokes the old key. Revoke or replace it here if it may have been
-							exposed.
-						</li>
-						<li>
-							Store the key in a secret manager or environment variable. Do not commit it, paste it
-							into prompts, or include it in screenshots or logs.
-						</li>
-						<li>
-							Use a client approval mode that asks before write, destructive, or open-world actions.
-							Review content, destination, and timing before publishing. MCP safety annotations are
-							hints; the server does not enforce client approval.
-						</li>
-					</ul>
-				</div>
-
-				<details class="group mt-3 rounded-xl border border-stone-200/80">
-					<summary
-						class="flex cursor-pointer list-none items-center gap-2.5 rounded-xl p-4 text-[13px] font-bold text-stone-900 hover:bg-stone-50 [&::-webkit-details-marker]:hidden"
-					>
-						If Cloudflare Access protects this endpoint
-						<ChevronDown
-							class="ml-auto h-4 w-4 shrink-0 text-stone-400 transition-transform group-open:rotate-180"
-						/>
-					</summary>
-					<div class="space-y-3 px-4 pb-4 text-[12px] leading-relaxed text-stone-600">
-						<p>
-							When an Access Service Auth policy protects
-							<code class="font-mono text-stone-900">/api/mcp</code>, send both
-							<code class="font-mono text-stone-900">CF-Access-Client-Id</code> and
-							<code class="font-mono text-stone-900">CF-Access-Client-Secret</code> as well as the CogSend
-							bearer key. These are separate credentials. Keep all three values in a local secret manager
-							or environment variables. Add these optional settings only when your Access policy requires
-							them:
-						</p>
-						<div class="min-w-0 space-y-3">
-							<div class="min-w-0">
-								<p class="text-[12px] font-bold text-stone-900">
-									Claude Code: merge into <code class="font-mono">headers</code>
-								</p>
-								<pre
-									class="mt-1.5 overflow-x-auto rounded-lg border border-stone-200/80 bg-stone-50 p-3 text-[11px] leading-relaxed text-stone-800"><code
-										>{claudeAccessHeaders}</code
-									></pre>
-							</div>
-							<div class="min-w-0">
-								<p class="text-[12px] font-bold text-stone-900">Codex: add to the server table</p>
-								<pre
-									class="mt-1.5 overflow-x-auto rounded-lg border border-stone-200/80 bg-stone-50 p-3 text-[11px] leading-relaxed text-stone-800"><code
-										>{codexAccessHeaders}</code
-									></pre>
-							</div>
-						</div>
-						<p>
-							If your client cannot send custom headers, choose an Access policy deliberately: use a
-							client that supports Service Auth, or consider a narrowly scoped bypass for
-							<code class="font-mono text-stone-900">/api/mcp</code> only if you accept that Access will
-							not authenticate those requests. CogSend's personal key remains required either way. Do
-							not bypass Access for the whole instance.
-						</p>
-					</div>
-				</details>
+				<p class="mt-5 max-w-prose text-[12px] leading-relaxed text-stone-500">
+					Give an agent a Read-only key unless it needs to change drafts or publish, and have your
+					client ask before it publishes. Tools, scopes and Cloudflare Access headers are in the
+					<a href="/api#mcp-server-heading" class="font-bold text-stone-900 underline"
+						>API reference</a
+					>.
+				</p>
 			</section>
 		</div>
 

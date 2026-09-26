@@ -25,15 +25,16 @@ import {
 import type { AppEnv } from './env';
 import {
 	classifyProviderError,
-	getProvider,
+	estimateKeyFor,
+	providerFor,
 	ProviderError,
 	PublishPartialError,
+	ZERNIO_MAX_POLLS,
 	type ConnectionCredentials,
 	type FetchLike,
 	type PublishCheckpoint,
 	type MediaStore,
-	type NormalizedPost,
-	type PlatformId
+	type NormalizedPost
 } from './providers';
 import { providerFetch } from './providers/timed-fetch';
 import { countingFetch, type SubrequestBudget } from './budget';
@@ -301,6 +302,12 @@ export function publishCallEstimate(platform: string, content: NormalizedPost): 
 			// and the identity check run once.
 			platformCalls += segments.length * 4 + images.length * 3 + 4;
 			break;
+		case 'zernio':
+			// One create and the status polls; media travels as URLs, so no
+			// uploads. Storage reads are still counted above: bytes are hydrated
+			// before any provider runs.
+			platformCalls += ZERNIO_MAX_POLLS;
+			break;
 		default:
 			platformCalls += segments.length * 3 + media.length * 3;
 	}
@@ -355,13 +362,15 @@ export async function publishTarget(
 	// target WITHOUT burning an attempt. The WHERE excludes scheduled rows
 	// so future schedules are never touched here.
 	let knownPlatform: string | null = null;
+	let knownEstimateKey: string | null = null;
 	try {
 		const preConn = await first(
 			db.select().from(connections).where(eq(connections.id, target.connectionId))
 		);
 		if (preConn) {
 			knownPlatform = preConn.platform;
-			const provider = getProvider(preConn.platform as PlatformId);
+			knownEstimateKey = estimateKeyFor(preConn);
+			const provider = providerFor(preConn);
 			const reason = provider.refreshImpossibleReason?.(
 				await decryptJson<ConnectionCredentials>(
 					preConn.credentialsEncrypted,
@@ -403,7 +412,8 @@ export async function publishTarget(
 	if (options.budget && !options.mustTry && knownPlatform) {
 		try {
 			prebuilt = await buildNormalizedPost(db, target.draftId, knownPlatform);
-			const needed = publishCallEstimate(knownPlatform, prebuilt) + PUBLISH_RESERVE_CALLS;
+			const needed =
+				publishCallEstimate(knownEstimateKey ?? knownPlatform, prebuilt) + PUBLISH_RESERVE_CALLS;
 			if (options.budget.remaining < needed) {
 				return { status: target.status, skipped: true, deferred: true };
 			}
@@ -503,7 +513,11 @@ export async function publishTarget(
 		}
 	};
 
+	// A holder rather than a `let`: the assignment happens inside the callback,
+	// which TypeScript's narrowing cannot see from the catch block below.
+	const resumeState: { last: PublishCheckpoint | null } = { last: null };
 	const checkpoint = async (state: PublishCheckpoint) => {
+		resumeState.last = state;
 		await renewLease();
 		try {
 			await db
@@ -528,7 +542,7 @@ export async function publishTarget(
 			env.APP_ENCRYPTION_KEY
 		);
 		const meta = parseJson<{ maxCharacters?: number; handle?: string }>(conn.metaJson, {});
-		const provider = getProvider(conn.platform as PlatformId);
+		const provider = providerFor(conn);
 		const content = await hydrateMedia(
 			prebuilt ?? (await buildNormalizedPost(db, target.draftId, conn.platform)),
 			store
@@ -700,7 +714,12 @@ export async function publishTarget(
 				retryable: isFailureRetryable(err, message),
 				now,
 				partial,
-				errorDetail
+				errorDetail,
+				// Whatever the provider last checkpointed survives a failure that is
+				// not partial: a remote post created before the error (Zernio creates,
+				// then polls) must be resumed, not created twice. An empty list is the
+				// provider saying that post is dead, so the retry starts fresh.
+				lastCheckpoint: resumeState.last
 			}
 		);
 		return { status: nextStatus, error: message };
@@ -758,7 +777,10 @@ async function lastPartialResume(db: AppDb, targetId: string) {
 			remoteUrl?: string | null;
 			remotePostId?: string;
 		}>(attempt.responseSummary, {});
-		if (summary.segmentIds?.length) {
+		// An empty list is a statement, not an absence: the provider found the
+		// remote post it was resuming dead and asked for a fresh start.
+		if (Array.isArray(summary.segmentIds)) {
+			if (!summary.segmentIds.length) return null;
 			return {
 				segmentIds: summary.segmentIds,
 				segmentCids: summary.segmentCids,
@@ -782,6 +804,7 @@ async function markFailed(
 		now?: Date;
 		partial?: PublishPartialError | null;
 		errorDetail?: string | null;
+		lastCheckpoint?: PublishCheckpoint | null;
 	} = {}
 ): Promise<'scheduled' | 'failed' | 'published'> {
 	const now = opts.now ?? new Date();
@@ -833,6 +856,10 @@ async function markFailed(
 			summary.segmentIds = opts.partial.segmentIds;
 			summary.segmentCids = opts.partial.segmentCids;
 			summary.remoteUrl = opts.partial.remoteUrl ?? null;
+		} else if (opts.lastCheckpoint) {
+			summary.segmentIds = opts.lastCheckpoint.segmentIds;
+			summary.segmentCids = opts.lastCheckpoint.segmentCids;
+			summary.remoteUrl = opts.lastCheckpoint.remoteUrl ?? null;
 		}
 		if (opts.errorDetail) summary.errorDetail = opts.errorDetail;
 		await db

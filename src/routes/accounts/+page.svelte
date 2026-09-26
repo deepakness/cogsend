@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { ChevronDown, Plus, X } from '@lucide/svelte';
+	import { ChevronDown, Plug, Plus, X } from '@lucide/svelte';
 	import { fade, fly } from 'svelte/transition';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import CopyButton from '$lib/components/CopyButton.svelte';
@@ -23,6 +23,8 @@
 	} from '$lib/domain/platform-setup';
 	import { sessionExpiredIfUnauthorized } from '$lib/components/session-expired';
 	import { dialogFocus } from '$lib/components/dialog-focus';
+	import { ZERNIO_API_KEYS_URL } from '$lib/domain/zernio';
+	import { zernioLink } from '$lib/domain/zernio-links';
 
 	let { data } = $props();
 
@@ -34,7 +36,24 @@
 		avatarUrl?: string | null;
 		instanceUrl: string | null;
 		status: string;
+		metaJson?: { provider?: string; zernioProfileId?: string } | null;
 	};
+	type ZernioAccount = {
+		id: string;
+		platform: string;
+		profileId: string;
+		handle: string | null;
+		displayName: string | null;
+		avatarUrl: string | null;
+		needsReconnection: boolean;
+		imported: boolean;
+	};
+	// Bluesky is imported, never connected from here: Zernio's hosted Bluesky
+	// page cannot bring the visitor back with a usable result yet.
+	const ZERNIO_PLATFORMS = ['x', 'threads', 'linkedin'] as const;
+	const isZernioPlatform = (p: string): p is (typeof ZERNIO_PLATFORMS)[number] =>
+		(ZERNIO_PLATFORMS as readonly string[]).includes(p);
+	const viaZernio = (account: Connection) => account.metaJson?.provider === 'zernio';
 
 	// Same order load() applies after a refresh, so the first paint matches it.
 	// svelte-ignore state_referenced_locally
@@ -74,7 +93,7 @@
 	let pendingDisconnect = $state<{ id: string; label: string } | null>(null);
 	let disconnectBusy = $state(false);
 	let showConnectDialog = $state(false);
-	let modalForm = $state<'none' | 'bluesky' | 'mastodon'>('none');
+	let modalForm = $state<'none' | 'bluesky' | 'mastodon' | 'zernio'>('none');
 	// Set when the picked platform has no credentials on this deployment: the
 	// dialog shows its setup steps instead of a request that can only fail.
 	let setupPanel = $state<OAuthPlatformId | null>(null);
@@ -82,6 +101,14 @@
 	// svelte-ignore state_referenced_locally
 	let appUrl = $state(data.appUrl ?? '');
 	let connectCloseBtn: HTMLButtonElement | null = $state(null);
+	let zernioApiKey = $state('');
+	let zernioProfiles = $state<Array<{ id: string; name: string }>>([]);
+	let zernioAccounts = $state<ZernioAccount[] | null>(null);
+	let zernioSelected = $state<string[]>([]);
+	// svelte-ignore state_referenced_locally
+	let zernioHasStoredKey = $state(connections.some(viaZernio));
+	let zernioConnectPlatform = $state<(typeof ZERNIO_PLATFORMS)[number]>('x');
+	let zernioConnectProfile = $state('');
 
 	const availablePlatforms = [
 		{
@@ -135,6 +162,7 @@
 			connections = [...(payload.connections || [])].sort(
 				(a: Connection, b: Connection) => platformRank(a.platform) - platformRank(b.platform)
 			);
+			zernioHasStoredKey = connections.some(viaZernio);
 			if (typeof payload.appUrl === 'string') appUrl = payload.appUrl;
 			if (payload.configured && typeof payload.configured === 'object') {
 				configured = {
@@ -217,6 +245,92 @@
 		await connectOAuth('mastodon', { instanceUrl });
 	}
 
+	async function loadZernioAccounts(e?: Event) {
+		e?.preventDefault();
+		loading = true;
+		err = null;
+		try {
+			const res = await fetch('/api/connections/zernio/accounts', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(zernioApiKey ? { apiKey: zernioApiKey } : {})
+			});
+			const payload = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(payload.error || 'Could not reach Zernio');
+			zernioProfiles = payload.profiles ?? [];
+			zernioAccounts = payload.accounts ?? [];
+			zernioHasStoredKey = payload.hasStoredKey === true || Boolean(zernioApiKey);
+			zernioSelected = (zernioAccounts ?? []).filter((a) => !a.imported).map((a) => a.id);
+			if (!zernioConnectProfile) zernioConnectProfile = zernioProfiles[0]?.id ?? '';
+		} catch (e) {
+			err = humanizeError(e instanceof Error ? e.message : 'Could not reach Zernio');
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function importZernioAccounts() {
+		loading = true;
+		err = null;
+		try {
+			const res = await fetch('/api/connections/zernio/import', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					...(zernioApiKey ? { apiKey: zernioApiKey } : {}),
+					accountIds: zernioSelected
+				})
+			});
+			const payload = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(payload.error || 'Could not import');
+			const n = (payload.connections ?? []).length;
+			msg = `Imported ${n} account${n === 1 ? '' : 's'} from Zernio`;
+			zernioApiKey = '';
+			closeConnectDialog();
+			await load();
+		} catch (e) {
+			err = humanizeError(e instanceof Error ? e.message : 'Could not import');
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function connectThroughZernio(platform: string, profileId: string) {
+		loading = true;
+		err = null;
+		try {
+			const res = await fetch('/api/connections/zernio/connect', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					...(zernioApiKey ? { apiKey: zernioApiKey } : {}),
+					platform,
+					profileId
+				})
+			});
+			const payload = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(payload.error || 'Could not start the connection');
+			window.location.href = payload.authorizeUrl;
+		} catch (e) {
+			err = humanizeError(e instanceof Error ? e.message : 'Could not start the connection');
+			loading = false;
+		}
+	}
+
+	function openZernioForm(platform?: OAuthPlatformId) {
+		openConnectDialog();
+		modalForm = 'zernio';
+		zernioAccounts = null;
+		if (platform) zernioConnectPlatform = platform;
+		if (zernioHasStoredKey) void loadZernioAccounts();
+	}
+
+	function toggleZernioAccount(id: string) {
+		zernioSelected = zernioSelected.includes(id)
+			? zernioSelected.filter((x) => x !== id)
+			: [...zernioSelected, id];
+	}
+
 	function pickPlatform(id: string) {
 		const found = availablePlatforms.find((p) => p.id === id);
 		if (!found) return;
@@ -293,6 +407,19 @@
 	// open its dialog prefilled instead.
 	function reconnectAccount(account: Connection) {
 		err = null;
+		if (viaZernio(account)) {
+			const profileId = account.metaJson?.zernioProfileId ?? '';
+			if (account.platform === 'bluesky') {
+				err = 'Reconnect Bluesky in Zernio, then press Check';
+				return;
+			}
+			if (!isZernioPlatform(account.platform) || !profileId) {
+				err = 'This account has no Zernio profile recorded — import it again';
+				return;
+			}
+			void connectThroughZernio(account.platform, profileId);
+			return;
+		}
 		if (account.platform === 'bluesky') {
 			handle = account.handle ?? '';
 			appPassword = '';
@@ -437,6 +564,12 @@
 						<div>
 							<h3 class="text-[15px] leading-tight font-extrabold tracking-tight text-stone-900">
 								{platformName(account.platform)}
+								{#if viaZernio(account)}
+									<span
+										class="ml-1 rounded bg-stone-100 px-1.5 py-0.5 align-middle text-[10px] font-bold tracking-widest text-stone-500 uppercase"
+										>via Zernio</span
+									>
+								{/if}
 							</h3>
 							<p
 								class="mt-0.5 text-[13px] font-medium text-stone-500"
@@ -668,6 +801,19 @@
 							class="inline-block text-[13px] font-bold text-stone-900 underline"
 							>Full {platformName(setupPanel)} steps</a
 						>
+						<p
+							class="rounded-xl border border-dashed border-stone-300 px-3 py-2.5 text-xs font-medium text-stone-600"
+							data-testid="setup-zernio-callout"
+						>
+							Don't want to set up an app?
+							<button
+								type="button"
+								onclick={() => openZernioForm(setupPanel ?? undefined)}
+								class="font-bold text-stone-900 underline"
+								>Connect {platformName(setupPanel)} through Zernio</button
+							>
+							instead.{setupPanel === 'x' ? '' : ' Free plan available.'}
+						</p>
 					</div>
 				{/key}
 			{:else if modalForm === 'none'}
@@ -682,7 +828,11 @@
 								<span
 									class="flex h-12 w-12 items-center justify-center rounded-[1rem] bg-stone-100 font-bold text-stone-600 shadow-sm transition-colors group-hover:bg-stone-200/50 group-hover:text-stone-900"
 								>
-									<SocialIcon platform={platform.id} className="h-5 w-5" />
+									{#if platform.id === 'zernio'}
+										<Plug class="h-5 w-5" />
+									{:else}
+										<SocialIcon platform={platform.id} className="h-5 w-5" />
+									{/if}
 								</span>
 								<div>
 									<h3 class="text-[15px] font-extrabold tracking-tight text-stone-900">
@@ -708,6 +858,35 @@
 						</button>
 					{/each}
 				</div>
+				<div class="my-5 flex items-center gap-3" aria-hidden="true">
+					<span class="h-px flex-1 bg-stone-200"></span>
+					<span class="text-[11px] font-bold tracking-widest text-stone-400 uppercase">or</span>
+					<span class="h-px flex-1 bg-stone-200"></span>
+				</div>
+				<button
+					type="button"
+					class="group flex w-full items-center justify-between gap-3 rounded-[1.5rem] border border-dashed border-stone-300 bg-stone-50/60 p-4 text-left transition-all hover:border-stone-400 hover:bg-white"
+					onclick={() => openZernioForm()}
+					data-testid="zernio-card"
+				>
+					<div class="flex items-center gap-4">
+						<span
+							class="flex h-12 w-12 items-center justify-center rounded-[1rem] bg-white text-stone-600 shadow-sm transition-colors group-hover:text-stone-900"
+						>
+							<Plug class="h-5 w-5" />
+						</span>
+						<div>
+							<h3 class="text-[15px] font-extrabold tracking-tight text-stone-900">
+								Connect through Zernio
+							</h3>
+							<p class="mt-0.5 text-[13px] font-medium text-stone-500">No developer apps needed</p>
+						</div>
+					</div>
+					<span
+						class="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-bold tracking-tight text-emerald-700"
+						>Free plan</span
+					>
+				</button>
 			{:else if modalForm === 'bluesky'}
 				<form onsubmit={connectBluesky} class="space-y-3">
 					<button
@@ -757,6 +936,140 @@
 						>{loading ? 'Connecting…' : 'Connect Bluesky'}</button
 					>
 				</form>
+			{:else if modalForm === 'zernio'}
+				<div class="space-y-4">
+					<button
+						type="button"
+						onclick={backToPlatforms}
+						class="text-[13px] font-bold text-stone-500 hover:text-stone-900"
+						>← All platforms</button
+					>
+					<h3 class="text-[17px] font-extrabold tracking-tight text-stone-900">Zernio</h3>
+					<p class="text-xs font-medium text-stone-500">
+						Zernio publishes with its own approved apps, so X, Threads, LinkedIn and Bluesky connect
+						without a developer app of your own. It has a free plan (X needs a card), and posts
+						still live and schedule here.
+						<a
+							href={zernioLink({ placement: 'accounts-dialog' })}
+							target="_blank"
+							rel="noreferrer"
+							class="underline">About Zernio</a
+						>
+					</p>
+					<form onsubmit={loadZernioAccounts} class="space-y-3">
+						<input
+							type="password"
+							placeholder={zernioHasStoredKey
+								? 'API key (saved — leave blank to reuse)'
+								: 'Zernio API key'}
+							aria-label="Zernio API key"
+							bind:value={zernioApiKey}
+							class="w-full rounded-xl border border-stone-200/80 bg-stone-50 px-3 py-2.5 text-sm font-bold text-stone-900 focus:border-stone-400 focus:bg-white focus:outline-none"
+							required={!zernioHasStoredKey}
+							autocomplete="off"
+						/>
+						<p class="text-[11px] font-medium text-stone-500">
+							Create one at <a
+								href={ZERNIO_API_KEYS_URL}
+								target="_blank"
+								rel="noreferrer"
+								class="underline">zernio.com → API keys</a
+							>. It needs the publishing and accounts groups; a read-only key cannot post.
+						</p>
+						{#if zernioAccounts === null}
+							<button
+								type="submit"
+								disabled={loading}
+								class="w-full rounded-full bg-stone-900 py-2.5 text-[13px] font-bold text-white transition-all hover:bg-stone-800 disabled:opacity-50"
+								>{loading ? 'Loading…' : 'Show my Zernio accounts'}</button
+							>
+						{/if}
+					</form>
+					{#if zernioAccounts !== null}
+						{#if zernioAccounts.length === 0}
+							<p class="text-xs font-medium text-stone-500">
+								No X, Threads, LinkedIn or Bluesky accounts on this key yet. Connect one below.
+							</p>
+						{:else}
+							<ul
+								class="divide-y divide-stone-200/80 overflow-hidden rounded-xl border border-stone-200/80"
+							>
+								{#each zernioAccounts as account (account.id)}
+									<li class="flex items-center gap-3 p-3 text-sm">
+										<input
+											type="checkbox"
+											id={`zernio-${account.id}`}
+											checked={account.imported || zernioSelected.includes(account.id)}
+											disabled={account.imported}
+											onchange={() => toggleZernioAccount(account.id)}
+											class="h-4 w-4"
+										/>
+										<label for={`zernio-${account.id}`} class="min-w-0 flex-1 cursor-pointer">
+											<span class="font-bold text-stone-900">{platformName(account.platform)}</span>
+											<span class="ml-2 text-stone-500"
+												>{accountLabel(account.displayName, account.handle)}</span
+											>
+										</label>
+										{#if account.imported}
+											<span class="text-[10px] font-bold tracking-widest text-emerald-700 uppercase"
+												>Imported</span
+											>
+										{:else if account.needsReconnection}
+											<span class="text-[10px] font-bold tracking-widest text-amber-700 uppercase"
+												>Needs reconnect</span
+											>
+										{/if}
+									</li>
+								{/each}
+							</ul>
+							<button
+								type="button"
+								onclick={importZernioAccounts}
+								disabled={loading || zernioSelected.length === 0}
+								class="w-full rounded-full bg-stone-900 py-2.5 text-[13px] font-bold text-white transition-all hover:bg-stone-800 disabled:opacity-50"
+								>{loading
+									? 'Importing…'
+									: `Import ${zernioSelected.length} account${zernioSelected.length === 1 ? '' : 's'}`}</button
+							>
+						{/if}
+						<div class="space-y-2 rounded-xl border border-stone-200/80 bg-stone-50 p-3">
+							<p class="text-xs font-bold text-stone-900">Connect a new account through Zernio</p>
+							<div class="flex flex-wrap gap-2">
+								<select
+									aria-label="Platform"
+									bind:value={zernioConnectPlatform}
+									class="rounded-lg border border-stone-200/80 bg-white px-2 py-1.5 text-xs font-bold text-stone-900"
+								>
+									{#each ZERNIO_PLATFORMS as id (id)}
+										<option value={id}>{platformName(id)}</option>
+									{/each}
+								</select>
+								<select
+									aria-label="Zernio profile"
+									bind:value={zernioConnectProfile}
+									class="rounded-lg border border-stone-200/80 bg-white px-2 py-1.5 text-xs font-bold text-stone-900"
+								>
+									{#each zernioProfiles as profile (profile.id)}
+										<option value={profile.id}>{profile.name}</option>
+									{/each}
+								</select>
+								<button
+									type="button"
+									disabled={loading || !zernioConnectProfile}
+									onclick={() => connectThroughZernio(zernioConnectPlatform, zernioConnectProfile)}
+									class="rounded-full border border-stone-300 bg-white px-4 py-1.5 text-[12px] font-bold text-stone-900 transition-colors hover:bg-stone-100 disabled:opacity-50"
+									>{loading ? 'Redirecting…' : 'Connect'}</button
+								>
+							</div>
+							<p class="text-[11px] font-medium text-stone-500">
+								You authorize on the platform, come back here, and the account is imported.
+							</p>
+						</div>
+					{/if}
+					{#if err}
+						<p class="text-sm text-red-600">{err}</p>
+					{/if}
+				</div>
 			{:else}
 				<form onsubmit={connectMastodon} class="space-y-3">
 					<button

@@ -51,7 +51,8 @@ export function isPublicPath(path: string): boolean {
 		path.startsWith('/api/connections/mastodon/callback') ||
 		path.startsWith('/api/connections/linkedin/callback') ||
 		path.startsWith('/api/connections/threads/callback') ||
-		path.startsWith('/api/connections/x/callback')
+		path.startsWith('/api/connections/x/callback') ||
+		path.startsWith('/api/connections/zernio/callback')
 	)
 		return true;
 	if (path === '/api/auth/login' || path === '/api/auth/logout' || path === '/api/auth/me')

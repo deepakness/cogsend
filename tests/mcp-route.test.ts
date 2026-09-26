@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	CLIENT_CAPABILITIES_META_KEY,
@@ -5,7 +6,8 @@ import {
 } from '@modelcontextprotocol/server';
 import { createTestAdmin, createTestDb, createTestMedia, TEST_ENV } from '$lib/server/db/test';
 import { newId } from '$lib/server/db/client';
-import { connections, drafts, publishTargets } from '$lib/server/db/schema';
+import { connections, draftMedia, drafts, publishTargets } from '$lib/server/db/schema';
+import { memoryMediaStore, thumbCacheKey } from '$lib/server/media';
 import * as publish from '$lib/server/publish';
 import { DELETE, GET, POST } from '../src/routes/api/mcp/+server';
 
@@ -354,6 +356,34 @@ describe('MCP route', () => {
 		});
 		expect(payload.result!.isError).toBe(true);
 		expect(payload.result!.structuredContent).toEqual({ error: 'Not found', status: 404 });
+	});
+
+	it('deletes a draft with its media and cached thumbnails, like the REST route', async () => {
+		const draftId = await seedDraft();
+		const storageKey = `${Date.now()}-abcdef0123456789.png`;
+		const store = new Map<string, { bytes: Uint8Array; mime: string }>();
+		store.set(storageKey, { bytes: new Uint8Array([1]), mime: 'image/png' });
+		store.set(thumbCacheKey(storageKey), { bytes: new Uint8Array([2]), mime: 'image/webp' });
+		await db.insert(draftMedia).values({
+			id: newId(),
+			draftId,
+			storageKey,
+			mime: 'image/png',
+			size: 1,
+			sortOrder: 0,
+			segmentIndex: 0,
+			createdAt: new Date()
+		});
+
+		const { payload } = await postMcp(
+			'tools/call',
+			{ name: 'delete_draft', arguments: { draftId } },
+			{ media: memoryMediaStore(store) }
+		);
+
+		expect(payload.result!.structuredContent).toEqual({ ok: true });
+		expect(store.size).toBe(0);
+		expect(await db.select().from(drafts).where(eq(drafts.id, draftId))).toEqual([]);
 	});
 
 	it('preserves repeat-publish skips and schedule conflict details', async () => {

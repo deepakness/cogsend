@@ -1,19 +1,22 @@
 import { and, eq } from 'drizzle-orm';
 import type { RequestHandler } from './$types';
+import { isZernioConnection } from '$lib/domain/zernio';
 import { decryptJson, encryptJson } from '$lib/server/crypto';
-import { first } from '$lib/server/db/client';
+import { first, parseJson } from '$lib/server/db/client';
 import { connections } from '$lib/server/db/schema';
 import { fail, handleError, ok } from '$lib/server/http';
 import {
 	blueskyCreateSession,
 	getProvider,
 	linkedinVerify,
+	ProviderError,
 	threadsVerify,
 	xVerify,
 	type ConnectionCredentials
 } from '$lib/server/providers';
 import { sanitizeMastodonInstanceUrl } from '$lib/server/providers/mastodon';
 import { requireSession } from '$lib/server/require';
+import { isZernioAccountDead, listAccounts } from '$lib/server/zernio';
 
 export const POST: RequestHandler = async ({ params, locals }) => {
 	const { id } = params;
@@ -51,7 +54,50 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 			locals.env.APP_ENCRYPTION_KEY
 		);
 
-		if (conn.platform === 'bluesky') {
+		if (isZernioConnection(conn.metaJson)) {
+			const meta = parseJson<{ zernioAccountId?: string; zernioProfileId?: string }>(
+				conn.metaJson,
+				{}
+			);
+			let account;
+			try {
+				account = (
+					await listAccounts({ apiKey: creds.zernioApiKey ?? '', profileId: meta.zernioProfileId })
+				).find((a) => a._id === (creds.zernioAccountId ?? meta.zernioAccountId));
+			} catch (err) {
+				if (err instanceof ProviderError && err.code === 'auth') {
+					await locals.db
+						.update(connections)
+						.set({ status: 'expired', updatedAt: new Date() })
+						.where(owned);
+					return fail(
+						'Zernio rejected the stored API key — import the account again with a new key',
+						401
+					);
+				}
+				// Transient (429/5xx/network): keep the status, like Mastodon.
+				return fail('Zernio verify temporarily unavailable', 502);
+			}
+			if (!account || isZernioAccountDead(account)) {
+				await locals.db
+					.update(connections)
+					.set({ status: 'expired', updatedAt: new Date() })
+					.where(owned);
+				return fail('Reconnect this account in Zernio, then check again', 401);
+			}
+			const handle = (account.username ?? '').replace(/^@/, '').trim() || conn.handle;
+			await locals.db
+				.update(connections)
+				.set({
+					status: 'active',
+					handle,
+					displayName: account.displayName?.trim() || conn.displayName,
+					avatarUrl: account.profilePicture || conn.avatarUrl,
+					updatedAt: new Date()
+				})
+				.where(owned);
+			return ok({ ok: true, status: 'active' });
+		} else if (conn.platform === 'bluesky') {
 			const session = await blueskyCreateSession(
 				creds.handle || conn.handle || '',
 				creds.appPassword || '',

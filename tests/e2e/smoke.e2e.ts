@@ -640,8 +640,10 @@ test('api key works logged out, stays out of key management', async () => {
 	await expect(page.getByTestId('mcp-endpoint')).toHaveText(`${origin}/api/mcp`);
 	await expect(mcpSetup).toContainText('Claude Code');
 	await expect(mcpSetup).toContainText('OpenAI Codex');
-	await expect(mcpSetup).toContainText('Generic client');
-	await expect(mcpSetup).toContainText('CF-Access-Client-Id');
+	await expect(mcpSetup.getByRole('link', { name: 'API reference' })).toHaveAttribute(
+		'href',
+		'/api#mcp-server-heading'
+	);
 	await expect(mcpSetup.locator('pre').nth(0)).toContainText('Bearer ${COGSEND_API_KEY}');
 	await expect(mcpSetup.locator('pre').nth(1)).toContainText(
 		'bearer_token_env_var = "COGSEND_API_KEY"'
@@ -649,7 +651,6 @@ test('api key works logged out, stays out of key management', async () => {
 	await expect(mcpSetup.locator('pre').nth(1)).toContainText(
 		'default_tools_approval_mode = "prompt"'
 	);
-	await expect(mcpSetup.locator('pre').nth(2)).toContainText('StreamableHTTPClientTransport');
 	await expect(page.locator('input[name="api-key-scopes"][value="read-write"]')).toBeChecked();
 	await page.locator('input[name="api-key-scopes"][value="read"]').check();
 	await clickUntilVisible(

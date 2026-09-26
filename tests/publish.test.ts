@@ -1378,4 +1378,199 @@ describe('publish auth classification', () => {
 		);
 		expect(creds.threadsUserId).toBe('999');
 	});
+
+	describe('through Zernio', () => {
+		async function zernioConnection(overrides: Record<string, unknown> = {}) {
+			const id = newId();
+			const now = new Date();
+			await db.insert(connections).values({
+				id,
+				userId,
+				platform: 'x',
+				handle: 'acme',
+				credentialsEncrypted: await encryptJson(
+					{ zernioApiKey: 'zk_1', zernioAccountId: 'acc-1' },
+					TEST_ENV.APP_ENCRYPTION_KEY
+				),
+				metaJson: JSON.stringify({ provider: 'zernio', zernioAccountId: 'acc-1' }),
+				status: 'active',
+				createdAt: now,
+				updatedAt: now,
+				...overrides
+			});
+			return id;
+		}
+
+		const target = (connectionId: string) => pendingTarget(connectionId, `zernio ${newId()}`);
+
+		const publishedPost = (postId: string) =>
+			Response.json({
+				post: {
+					_id: postId,
+					platforms: [
+						{
+							platform: 'twitter',
+							accountId: 'acc-1',
+							status: 'published',
+							platformPostId: '555',
+							platformPostUrl: 'https://x.com/acme/status/555'
+						}
+					]
+				}
+			});
+
+		it('publishes and records the platform permalink', async () => {
+			const conn = await zernioConnection();
+			const targetId = await target(conn);
+			const seen: Request[] = [];
+			const fetchImpl = mockFetch({
+				'/v1/posts/post-a': () => publishedPost('post-a'),
+				'/v1/posts': (req) => {
+					seen.push(req);
+					return Response.json({ post: { _id: 'post-a', platforms: [] } });
+				}
+			});
+			// The real poll interval is 3 s; the provider is memoised, so the
+			// test drives the default and expects the first poll to settle it.
+			const result = await publishTarget(db, TEST_ENV, store, targetId, { fetchImpl });
+			expect(result.status).toBe('published');
+			const row = (
+				await db.select().from(publishTargets).where(eq(publishTargets.id, targetId))
+			)[0];
+			expect(row.remotePostId).toBe('555');
+			expect(row.remoteUrl).toBe('https://x.com/acme/status/555');
+			expect(seen[0].headers.get('authorization')).toBe('Bearer zk_1');
+			expect(seen[0].headers.get('x-request-id')).toBe(`${targetId}-0`);
+		});
+
+		it('expires the connection when Zernio reports the token dead', async () => {
+			const conn = await zernioConnection();
+			const targetId = await target(conn);
+			const fetchImpl = mockFetch({
+				'/v1/posts/post-b': () =>
+					Response.json({
+						post: {
+							_id: 'post-b',
+							platforms: [
+								{
+									platform: 'twitter',
+									accountId: 'acc-1',
+									status: 'failed',
+									errorCategory: 'auth_expired',
+									errorMessage: 'Reconnect the account'
+								}
+							]
+						}
+					}),
+				'/v1/posts': () => Response.json({ post: { _id: 'post-b', platforms: [] } })
+			});
+			const result = await publishTarget(db, TEST_ENV, store, targetId, { fetchImpl });
+			expect(result.status).toBe('failed');
+			expect(result.error).toContain('Reconnect the account');
+			const row = (await db.select().from(connections).where(eq(connections.id, conn)))[0];
+			expect(row.status).toBe('expired');
+		});
+
+		it('a poll that errors after the create keeps the post, so the retry polls instead of posting twice', async () => {
+			// Found live: a Threads thread outlived the poll window, one status read
+			// timed out, and the retry created a second post that Zernio refused as
+			// a duplicate, while the first one went live.
+			const conn = await zernioConnection();
+			const targetId = await target(conn);
+			const creates: Request[] = [];
+			const create = (req: Request) => {
+				creates.push(req);
+				return Response.json({ post: { _id: 'post-slow', platforms: [] } });
+			};
+			const timeout: FetchLike = async (input, init) => {
+				const url = String(input instanceof Request ? input.url : input);
+				if (url.includes('/v1/posts/post-slow')) {
+					throw Object.assign(new Error('Provider request timed out'), { status: 504 });
+				}
+				return mockFetch({ '/v1/posts': create })(input, init);
+			};
+			const first = await publishTarget(db, TEST_ENV, store, targetId, { fetchImpl: timeout });
+			expect(first.status).toBe('scheduled');
+			expect(creates).toHaveLength(1);
+
+			const second = await publishTarget(db, TEST_ENV, store, targetId, {
+				fetchImpl: mockFetch({
+					'/v1/posts/post-slow': () => publishedPost('post-slow'),
+					'/v1/posts': create
+				}),
+				now: new Date(Date.now() + 5 * 60_000)
+			});
+			expect(second.status).toBe('published');
+			expect(creates).toHaveLength(1);
+		});
+
+		it('a resume that finds Zernio failed lets the next attempt create a fresh post', async () => {
+			const conn = await zernioConnection();
+			const targetId = await target(conn);
+			// What a poll timeout leaves behind: an attempt whose checkpoint names
+			// the Zernio post, so the next attempt resumes by polling it.
+			await db.insert(publishAttempts).values({
+				id: newId(),
+				publishTargetId: targetId,
+				startedAt: new Date(Date.now() - 60_000),
+				finishedAt: new Date(Date.now() - 30_000),
+				success: false,
+				error: 'Zernio is still publishing this post',
+				responseSummary: JSON.stringify({ segmentIds: ['post-dead'], remoteUrl: null })
+			});
+			const creates: Request[] = [];
+			const dead = mockFetch({
+				'/v1/posts/post-dead': () =>
+					Response.json({
+						post: {
+							_id: 'post-dead',
+							platforms: [
+								{
+									platform: 'twitter',
+									accountId: 'acc-1',
+									status: 'failed',
+									errorCategory: 'platform_error',
+									errorMessage: 'X is down'
+								}
+							]
+						}
+					}),
+				'/v1/posts': (req) => {
+					creates.push(req);
+					return Response.json({ post: { _id: 'post-fresh', platforms: [] } });
+				}
+			});
+			const first = await publishTarget(db, TEST_ENV, store, targetId, { fetchImpl: dead });
+			expect(first.status).toBe('scheduled');
+			expect(first.error).toContain('X is down');
+			expect(creates).toHaveLength(0);
+
+			const fresh = mockFetch({
+				'/v1/posts/post-fresh': () => publishedPost('post-fresh'),
+				'/v1/posts/post-dead': () => new Response('must not poll the dead post', { status: 500 }),
+				'/v1/posts': (req) => {
+					creates.push(req);
+					return Response.json({ post: { _id: 'post-fresh', platforms: [] } });
+				}
+			});
+			const second = await publishTarget(db, TEST_ENV, store, targetId, {
+				fetchImpl: fresh,
+				now: new Date(Date.now() + 5 * 60_000)
+			});
+			expect(second.status).toBe('published');
+			expect(creates).toHaveLength(1);
+		});
+
+		it('a rejected key never publishes and expires the connection', async () => {
+			const conn = await zernioConnection();
+			const targetId = await target(conn);
+			const fetchImpl = mockFetch({
+				'/v1/posts': () => Response.json({ error: 'Invalid API key' }, { status: 401 })
+			});
+			const result = await publishTarget(db, TEST_ENV, store, targetId, { fetchImpl });
+			expect(result.status).toBe('failed');
+			const row = (await db.select().from(connections).where(eq(connections.id, conn)))[0];
+			expect(row.status).toBe('expired');
+		});
+	});
 });
