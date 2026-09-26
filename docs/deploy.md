@@ -132,7 +132,8 @@ rolling back across a schema change can break things. Take a
 `setup` is the supported path. To run the steps yourself you need Node 22.12+, a Cloudflare account (`npx wrangler login`), and R2 enabled. Every
 command goes through `scripts/wrangler.mjs`, which applies your
 `wrangler.personal.jsonc` and `WRANGLER_PROFILE`; plain `npx wrangler …` would
-use the generic config in the repo.
+use the generic config in the repo, and skip the check that a command reaches
+the account you deployed to.
 
 Two commands. The first sets the one required secret; generate it with
 `openssl rand -hex 32` and keep it out of `vars`, because a deploy overwrites

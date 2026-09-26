@@ -104,18 +104,30 @@ editing `wrangler.jsonc`. Copy the committed file and change `name`,
 `database_id`, `database_name`, and `bucket_name`.
 
 Every npm script goes through `scripts/wrangler.mjs`, which passes `--config
-wrangler.personal.jsonc` automatically when that file exists, plus `--profile
-<name>` when `WRANGLER_PROFILE` is set:
+wrangler.personal.jsonc` automatically when that file exists.
+
+Because your changes live in files upstream never touches, `git pull upstream
+main` stays conflict-free. `npm run doctor` warns when the two configs disagree.
+
+### More than one Cloudflare account
+
+If your login reaches more than one account, or you keep several Wrangler auth profiles, pin the account in `wrangler.personal.jsonc`:
+
+```jsonc
+"account_id": "0123456789abcdef0123456789abcdef"
+```
+
+Every command then targets that account whatever the shell or folder, and a command run with a login that cannot reach it fails instead of writing somewhere else. The id is the first part of the dashboard URL (`dash.cloudflare.com/<account id>/…`), and `npm run doctor` prints the one your commands reach.
+
+`WRANGLER_PROFILE` picks a Wrangler auth profile for one command, and the wrapper passes it on as `--profile`:
 
 ```sh
 WRANGLER_PROFILE=my-account npm run deploy
 ```
 
-`account_id` in that same file pins the account too, and unlike an environment
-variable it cannot be inherited by a script that spawns a process of its own.
+It has to be on every command, though: one without it uses the profile bound to the folder, or the default login. A profile bound to the folder with `wrangler auth activate` stops applying when the checkout moves.
 
-Because your changes live in files upstream never touches, `git pull upstream
-main` stays conflict-free. `npm run doctor` warns when the two configs disagree.
+Each deploy records the account it went to in `.wrangler/deployed-accounts.json`. Commands that write, which are deploys, secrets, remote migrations, `setup` and `admin:reset`, print the account they are about to use and refuse to run against a different one. To move an instance to another account on purpose, deploy once with `COGSEND_ALLOW_ACCOUNT_CHANGE=1 npm run deploy`, which records the new account.
 
 ## The login
 
