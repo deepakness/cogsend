@@ -46,6 +46,8 @@ import { validatePollConfig } from '$lib/domain/poll';
 import { assertSafeStorageKey } from '$lib/server/media';
 import { STALE_CLAIM_MS } from '$lib/domain/due-jobs';
 import { ApiOperationError } from '$lib/server/api/operation-error';
+import { DRAFTS_LIST_LIMIT, DRAFTS_LIST_MAX_LIMIT } from '$lib/server/post-list';
+
 export type OperationContext = Pick<App.Locals, 'db' | 'env' | 'media'> & {
 	budget?: SubrequestBudget;
 	waitUntil?: (promise: Promise<unknown>) => void;
@@ -54,13 +56,19 @@ function invalid(message: string, status = 400, details?: Record<string, unknown
 	throw new ApiOperationError(message, status, details);
 }
 
+/** Five validators and a grapheme scan run over this text. */
+const MAX_VALIDATE_LENGTH = 200_000;
+
 export function validatePost(input: {
 	text?: unknown;
 	platform?: unknown;
 	maxCharacters?: unknown;
 }) {
 	const text = String(input.text || '');
-	if (text.length > 200_000) invalid('text must be 200000 characters or fewer', 413);
+	// Grapheme counting and five validators run over this: an unbounded body
+	// is free CPU pressure for any read-scoped key.
+	if (text.length > MAX_VALIDATE_LENGTH)
+		invalid(`text must be ${MAX_VALIDATE_LENGTH} characters or fewer`, 413);
 	const platform = input.platform as PlatformId | undefined;
 	const maxCharacters = input.maxCharacters as number | undefined;
 	const bluesky = validateBlueskyText(text),
@@ -96,28 +104,36 @@ export async function updateDraft(
 			.where(and(eq(drafts.id, id), eq(drafts.userId, userId)))
 	);
 	if (!old) invalid('Not found', 404);
-	const ts = await ctx.db.select().from(publishTargets).where(eq(publishTargets.draftId, id));
-	if (draftHasInFlightPublish(ts)) invalid('Publishing in progress — try again shortly', 409);
+	const liveTargets = await ctx.db
+		.select()
+		.from(publishTargets)
+		.where(eq(publishTargets.draftId, id));
+	if (draftHasInFlightPublish(liveTargets))
+		invalid('Publishing in progress — try again shortly', 409);
 	if (!body || typeof body !== 'object') invalid('Invalid JSON body');
 	const input = body as Record<string, unknown>;
-	const s = normalizeSelectedConnectionIds(input.selectedConnectionIds);
-	if (!s.ok) invalid(s.error);
+	const selection = normalizeSelectedConnectionIds(input.selectedConnectionIds);
+	if (!selection.ok) invalid(selection.error);
+	// Validate before the UPDATE: a non-string reaches the driver as a 500,
+	// and an unbounded string is stored as-is.
 	const patch: { title?: string | null; baseBody?: string; selectedConnectionIds?: string } = {};
 	if (input.title !== undefined) {
-		const t = parseDraftTitle(input.title);
-		if (!t.ok) invalid(t.error);
-		patch.title = t.value;
+		const title = parseDraftTitle(input.title);
+		if (!title.ok) invalid(title.error);
+		patch.title = title.value;
 	}
 	if (input.baseBody !== undefined) {
-		const b = parseDraftBody(input.baseBody);
-		if (!b.ok) invalid(b.error);
-		patch.baseBody = b.value;
+		const text = parseDraftBody(input.baseBody);
+		if (!text.ok) invalid(text.error);
+		patch.baseBody = text.value;
 	}
-	if (s.value !== undefined) patch.selectedConnectionIds = s.value;
+	if (selection.value !== undefined) patch.selectedConnectionIds = selection.value;
 	await ctx.db
 		.update(drafts)
 		.set({ ...patch, updatedAt: new Date() })
 		.where(eq(drafts.id, id));
+	// Autosave only needs an acknowledgement; the client already holds the
+	// saved state, so skip the full reload the GET performs.
 	return { ok: true as const };
 }
 export async function scheduleDraft(
@@ -219,6 +235,8 @@ export async function retryDelivery(ctx: OperationContext, userId: string, id: s
 		return { status: 'published', remotePostId: target.remotePostId, skipped: true };
 	const blocked = refuseInFlightOrPublished(target, now);
 	if (blocked) invalid(blocked, 409);
+	// The connection must still be usable: publishing into a dead account
+	// wastes an attempt and flips nothing useful.
 	const conn = await first(
 		ctx.db.select().from(connections).where(eq(connections.id, target.connectionId))
 	);
@@ -228,6 +246,8 @@ export async function retryDelivery(ctx: OperationContext, userId: string, id: s
 	const reset = await ctx.db
 		.update(publishTargets)
 		.set({
+			// Clear orphaned queue claims and reset the attempt budget: an
+			// explicit manual retry is fresh user intent.
 			status: 'pending',
 			scheduledFor: null,
 			errorMessage: null,
@@ -254,6 +274,7 @@ export async function retryDelivery(ctx: OperationContext, userId: string, id: s
 			return { status: 'published', remotePostId: latest.remotePostId, skipped: true };
 		invalid('Already publishing', 409);
 	}
+	// Survive a tab close mid-retry (see publishDraft).
 	const task = publishTarget(ctx.db, ctx.env, ctx.media, id, { now });
 	ctx.waitUntil?.(task.then(() => undefined).catch(() => undefined));
 	return task;
@@ -317,15 +338,20 @@ export async function rescheduleDelivery(
 	return { ok: true as const, scheduledFor: runAt.toISOString() };
 }
 
+// Keep the same shape saveMediaBytes mints; anything else would fail the
+// serving route's key check.
 const ALLOWED_MEDIA_EXTENSIONS = new Set(['jpg', 'png', 'webp', 'gif', 'mp4']);
+// 11 bound parameters per media row; D1 caps a query at 100.
 const MEDIA_INSERT_CHUNK = 8;
 const VARIANT_PLATFORMS = new Set(['mastodon', 'bluesky', 'linkedin', 'threads', 'x']);
 const VISIBILITIES = new Set(['public', 'unlisted', 'private', 'direct']);
 
 export async function listDrafts(ctx: OperationContext, userId: string, requestedLimit?: number) {
 	const limit = Number.isFinite(requestedLimit)
-		? Math.min(500, Math.max(1, Math.floor(requestedLimit!)))
-		: 200;
+		? Math.min(DRAFTS_LIST_MAX_LIMIT, Math.max(1, Math.floor(requestedLimit!)))
+		: DRAFTS_LIST_LIMIT;
+	// One extra row tells the client a longer history exists without a
+	// second count query.
 	const rows = await ctx.db
 		.select()
 		.from(drafts)
@@ -337,6 +363,7 @@ export async function listDrafts(ctx: OperationContext, userId: string, requeste
 	type VariantRow = InferSelectModel<typeof draftVariants>;
 	type MediaRow = InferSelectModel<typeof draftMedia>;
 	type TargetRow = InferSelectModel<typeof publishTargets>;
+	// Batched relations, IN-lists chunked for D1's bound-variable limit.
 	const ids = page.map((draft) => draft.id);
 	const variants: VariantRow[] = [];
 	const media: MediaRow[] = [];
@@ -427,6 +454,14 @@ export async function createDraft(
 	return { draft: serializeDraft(draft, { variants: [], media: [], targets: [] }) };
 }
 
+/**
+ * Copy a draft ("Post again" / "Duplicate"). Media bytes are copied to new
+ * R2 keys: the draft DELETE path removes objects unconditionally, so sharing
+ * keys would let deleting either copy destroy the other's images.
+ *
+ * Publish state is history, not content, so targets are never copied — the
+ * clone starts as a plain draft.
+ */
 export async function duplicateDraft(ctx: OperationContext, userId: string, draftId: string) {
 	const source = await first(
 		ctx.db
@@ -473,10 +508,16 @@ export async function duplicateDraft(ctx: OperationContext, userId: string, draf
 					)
 					.returning()
 			: [];
+		// Bytes first, rows after: a missing object skips that attachment
+		// instead of failing the whole copy (draft_media rows can outlive a
+		// lost R2 object after a partial outage).
 		const mediaValues: Array<typeof draftMedia.$inferInsert> = [];
 		for (const item of media) {
 			const bytes = await ctx.media.get(item.storageKey);
 			if (!bytes) continue;
+			// Defense in depth: the row is not trusted. The key must still match
+			// the shape saveMediaBytes mints (no traversal), and the bytes must
+			// still sniff as the media they are declared to be.
 			let extension: string;
 			try {
 				extension = assertSafeStorageKey(item.storageKey).split('.').pop() ?? '';
@@ -518,6 +559,8 @@ export async function duplicateDraft(ctx: OperationContext, userId: string, draf
 			draft: serializeDraft(draft, { variants: newVariants, media: newMedia, targets: [] })
 		};
 	} catch (error) {
+		// Never leak half a copy: remove the objects we wrote and the draft
+		// row (its variants/media cascade).
 		for (const key of savedKeys) await ctx.media.delete(key).catch(() => {});
 		await ctx.db
 			.delete(drafts)
@@ -527,6 +570,9 @@ export async function duplicateDraft(ctx: OperationContext, userId: string, draf
 	}
 }
 
+// Fail fast at write time. Options that reach the database unchecked are only
+// discovered at publish, where the failure is a provider error with no pointer
+// to the field that caused it. Mirrors provider.validate rules.
 function validateVariantOptions(options: unknown): string | null {
 	if (options === undefined) return null;
 	if (!options || typeof options !== 'object' || Array.isArray(options))
@@ -597,6 +643,8 @@ export async function setDraftVariant(
 		fields.options !== undefined
 			? JSON.stringify(fields.options ?? {})
 			: (existing?.optionsJson ?? '{}');
+	// Bounds the column, not just each field: `threadSegments` is an array of
+	// full-length posts, and a 10MB statement is a driver error, not a 400.
 	if (optionsJson.length > MAX_VARIANT_OPTIONS_LENGTH)
 		invalid(
 			`Variant options are too large to save (${optionsJson.length} characters, max ${MAX_VARIANT_OPTIONS_LENGTH})`
@@ -651,6 +699,29 @@ export async function deleteDraftVariant(
 	return { ok: true as const };
 }
 
+/**
+ * A destination this request did not start because its Cloudflare call budget
+ * might not cover it (see $lib/server/budget). Its target is a due "publish now"
+ * row, so the scheduler publishes it on the next tick.
+ */
+function queuedResult(
+	targetId: string,
+	conn: { id: string; platform: string; handle: string | null; displayName: string | null }
+) {
+	return {
+		targetId,
+		connectionId: conn.id,
+		platform: conn.platform,
+		handle: conn.handle,
+		displayName: conn.displayName,
+		status: 'pending',
+		permalink: null,
+		error: null,
+		skipped: true,
+		deferred: true
+	};
+}
+
 export async function publishDraft(
 	ctx: OperationContext,
 	userId: string,
@@ -680,6 +751,11 @@ export async function publishDraft(
 			)
 		);
 	if (userConnections.length !== connectionIds.length) invalid('One or more connections not found');
+	// Refuse fast when another request is already publishing these
+	// connections: without this, two concurrent POSTs both pass through
+	// to publishTarget. Already-published connections intentionally pass
+	// through to the skipped-result path below — re-posting a partially
+	// published draft (retry the failed platform) must keep working.
 	const now = new Date();
 	const classified = await classifyConnections(ctx.db, draftId, userConnections, now);
 	const inFlight = classified
@@ -688,7 +764,9 @@ export async function publishDraft(
 	if (inFlight.length) invalid('Already publishing', 409, { inFlight });
 	const ensured = await ensureTargets(ctx.db, draftId, userConnections, 'now', null, now);
 	const results = [];
+	/** Set when the batch was cut short by an infrastructure failure. */
 	let stopped: string | null = null;
+	/** Set once a target was left for the scheduler: the rest follow it. */
 	let deferring = false;
 	let attempted = 0;
 	for (const item of ensured) {
@@ -723,19 +801,13 @@ export async function publishDraft(
 			});
 			continue;
 		}
+		// Keep the publish alive if the browser disconnects (tab close or
+		// reload): waitUntil extends execution up to 30s past the
+		// disconnect, which covers the common publish. Longer runs that
+		// still get cut are rescheduled by the scheduler (retryable
+		// failures become `scheduled` with backoff).
 		if (deferring) {
-			results.push({
-				targetId: item.target.id,
-				connectionId: connection.id,
-				platform: connection.platform,
-				handle: connection.handle,
-				displayName: connection.displayName,
-				status: 'pending',
-				permalink: null,
-				error: null,
-				skipped: true,
-				deferred: true
-			});
+			results.push(queuedResult(item.target.id, connection));
 			continue;
 		}
 		try {
@@ -746,19 +818,9 @@ export async function publishDraft(
 			ctx.waitUntil?.(task.then(() => undefined).catch(() => undefined));
 			const result = await task;
 			if (result.deferred) {
+				// Left as a due "publish now" row: the next tick publishes it.
 				deferring = true;
-				results.push({
-					targetId: item.target.id,
-					connectionId: connection.id,
-					platform: connection.platform,
-					handle: connection.handle,
-					displayName: connection.displayName,
-					status: 'pending',
-					permalink: null,
-					error: null,
-					skipped: true,
-					deferred: true
-				});
+				results.push(queuedResult(item.target.id, connection));
 				continue;
 			}
 			attempted += 1;
@@ -777,7 +839,14 @@ export async function publishDraft(
 				skipped: result.skipped ?? false
 			});
 		} catch (error) {
+			// Infrastructure, not provider: on Workers Free the usual cause is
+			// D1's 50-statements-per-invocation budget, and the next target
+			// would fail the same way. Stop here and report what did publish
+			// (the tick does the same) instead of 500-ing after some accounts
+			// already posted — the untouched targets stay due for a retry.
 			console.error('[publish] aborted', item.target.id, error);
+			// Never null: the flag below is "did this stop", and an error we
+			// cannot humanize still stopped the batch.
 			stopped =
 				humanizedCause(error instanceof Error ? error.message : String(error)) ??
 				'Publishing stopped early — try again for the rest';
@@ -791,6 +860,8 @@ export async function publishDraft(
 		.where(eq(publishTargets.draftId, draftId));
 	return {
 		results,
+		// Only when the batch was cut short: `results` is what happened, and
+		// everything after the last entry was not attempted.
 		...(stopped !== null ? { stopped: true, stoppedError: stopped } : {}),
 		draft: draftAfter
 			? serializeDraft(draftAfter, {

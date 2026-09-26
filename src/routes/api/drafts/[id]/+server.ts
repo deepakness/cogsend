@@ -48,14 +48,17 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 			.from(publishTargets)
 			.where(eq(publishTargets.draftId, params.id));
 		if (draftHasInFlightPublish(liveTargets)) {
-			// Deleting mid-publish would leave a remote post without a local record.
+			// Deleting mid-publish orphans the remote post (fenced write finds
+			// no row → `preempted` with no record) and races media cleanup.
 			return fail('Publishing in progress — try again shortly', 409);
 		}
 		const files = await locals.db
 			.select()
 			.from(draftMedia)
 			.where(eq(draftMedia.draftId, params.id));
-		// Delete R2 objects first: a crash leaves retryable rows, not orphaned bytes.
+		// Delete R2 objects BEFORE the draft row: a crash between the two
+		// then leaves rows behind (retryable) instead of orphaned bytes.
+		// Object deletes are idempotent, so retrying is safe.
 		await deleteMediaObjects(
 			locals.media,
 			files.map((file) => file.storageKey)
