@@ -41,8 +41,13 @@ afterEach(() => {
  */
 function scratch({
 	whoami = 'flip',
-	loginFails = false
-}: { whoami?: 'flip' | 'signed-in' | 'garbage' | 'shape'; loginFails?: boolean } = {}) {
+	loginFails = false,
+	profileAccount = null
+}: {
+	whoami?: 'flip' | 'signed-in' | 'garbage' | 'shape';
+	loginFails?: boolean;
+	profileAccount?: string | null;
+} = {}) {
 	const created = mkdtempSync(join(tmpdir(), 'cogsend-login-'));
 	dir = created;
 	cpSync(join(process.cwd(), 'scripts'), join(created, 'scripts'), { recursive: true });
@@ -84,6 +89,12 @@ const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(join(created, 'calls.log'))}, JSON.stringify(args) + '\\n');
 const state = ${JSON.stringify(state)};
+if (process.env.WRANGLER_LOG === 'debug' && args.includes('secret')) {
+	const account = ${JSON.stringify(profileAccount)};
+	if (account) console.error('GET https://api.cloudflare.com/client/v4/accounts/' + account + '/workers/scripts/cogsend/secrets');
+	else console.error('✘ [ERROR] Not logged in.');
+	process.exit(1);
+}
 if (args.includes('whoami')) {${whoamiBranch}
 }
 if (args.includes('login')) { ${loginFails ? 'process.exit(1);' : "writeFileSync(state, 'signed-in'); process.exit(0);"} }
@@ -97,11 +108,15 @@ process.exit(0);
 }
 
 /** The non-terminal path: a pipe, a CI job or `--yes`. */
-function runSetup({ root, bin }: { root: string; bin: string }, args: string[] = []) {
+function runSetup(
+	{ root, bin }: { root: string; bin: string },
+	args: string[] = [],
+	env: Record<string, string> = {}
+) {
 	return spawnSync(process.execPath, [join(root, 'scripts/setup.mjs'), '--yes', ...args], {
 		cwd: root,
 		encoding: 'utf8',
-		env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+		env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ...env },
 		timeout: 60_000
 	});
 }
@@ -215,6 +230,46 @@ describe('npm run setup, already signed in', () => {
 
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain('signed in as me@example.com');
+		expect(loggedIn(scratchDir.root)).toBe(false);
+	});
+});
+
+/**
+ * `whoami` refuses `--profile` and answers for the folder's login, so with
+ * WRANGLER_PROFILE set it said nothing about the profile, and setup stopped at
+ * step 1. The fake's folder login is signed out on purpose: only the profile is
+ * signed in.
+ */
+describe('npm run setup, with WRANGLER_PROFILE', () => {
+	const ACCOUNT = '0123456789abcdef0123456789abcdef';
+
+	it('reads the account through the profile, not whoami', () => {
+		const scratchDir = scratch({ profileAccount: ACCOUNT });
+		const result = runSetup(scratchDir, ['--skip-deploy'], { WRANGLER_PROFILE: 'personal' });
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`signed in through profile personal on ${ACCOUNT}`);
+		expect(result.stdout).toContain('2. Configuration');
+		expect(loggedIn(scratchDir.root)).toBe(false);
+		// whoami still runs to name the account, but never with the flag it refuses.
+		const whoamis = calls(scratchDir.root).filter((args) => args.includes('whoami'));
+		expect(whoamis.some((args) => args.includes('--profile'))).toBe(false);
+		// Everything else does carry the profile.
+		expect(calls(scratchDir.root)).toContainEqual(
+			expect.arrayContaining(['d1', 'list', '--profile', 'personal'])
+		);
+	});
+
+	it('names the profile to sign in when it reaches no account', () => {
+		const scratchDir = scratch();
+		const result = runSetup(scratchDir, ['--skip-deploy'], { WRANGLER_PROFILE: 'personal' });
+
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain(
+			'could not reach Cloudflare through profile personal: Not logged in.'
+		);
+		expect(result.stderr).toContain('npx wrangler auth create personal');
+		// `wrangler login` would sign in the folder's login, not the profile.
 		expect(loggedIn(scratchDir.root)).toBe(false);
 	});
 });

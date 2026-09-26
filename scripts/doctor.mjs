@@ -623,6 +623,50 @@ async function probeApp(appUrl) {
 }
 
 /**
+ * Whether commands can reach Cloudflare at all.
+ *
+ * Without a profile `whoami` is the answer. With one it is not: `whoami`
+ * refuses `--profile` and describes the folder's login, which can be another
+ * login entirely. So the account a request made through the profile reached
+ * decides, and no email is shown, because none is known for that profile.
+ *
+ * @param {{ profile?: string | null, whoami?: any, reached?: { accountId: string | null, accountName: string | null, reason?: string } }} input
+ * @returns {Check}
+ */
+export function loginVerdict({ profile, whoami, reached }) {
+	if (profile) {
+		return reached?.accountId
+			? {
+					id: 'login',
+					status: 'ok',
+					label: `Signed in through profile ${profile} → ${reached.accountName ?? reached.accountId}`
+				}
+			: {
+					id: 'login',
+					status: 'fail',
+					label: `Could not reach Cloudflare through profile ${profile}`,
+					detail: reached?.reason,
+					fix: `npx wrangler auth create ${profile}`
+				};
+	}
+	if (!whoami?.loggedIn) {
+		return {
+			id: 'login',
+			status: 'fail',
+			label: 'Not signed in to Cloudflare',
+			fix: 'npx wrangler login (or set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID)'
+		};
+	}
+	return {
+		id: 'login',
+		status: 'ok',
+		label: `Signed in as ${whoami.email ?? '(unknown)'} → ${(whoami.accounts ?? [])
+			.map((/** @type {any} */ a) => a.name)
+			.join(', ')}`
+	};
+}
+
+/**
  * Whether the config pins the Cloudflare account.
  *
  * Without `account_id` a command goes wherever the active login points, which
@@ -710,35 +754,24 @@ async function main() {
 	}
 	if (config) checks.push(...evaluateConfig(config, { configFile, devVars }));
 
-	const who = wrangler(['whoami', '--json'], { timeout: 60_000 });
+	// Before the login line: with WRANGLER_PROFILE set, the account a request
+	// made through the profile reached is what says whether it is signed in.
+	const target = checkTarget({ env: { ...process.env, COGSEND_ALLOW_ACCOUNT_CHANGE: '' } });
 	/** @type {any} */
 	let account = null;
-	try {
-		account = JSON.parse(who.stdout);
-	} catch {
-		// Not JSON: the command failed, so this reads as signed out.
+	if (!target.profile) {
+		const who = wrangler(['whoami', '--json'], { timeout: 60_000 });
+		try {
+			account = JSON.parse(who.stdout);
+		} catch {
+			// Not JSON: the command failed, so this reads as signed out.
+		}
 	}
-	if (!account?.loggedIn) {
-		checks.push({
-			id: 'login',
-			status: 'fail',
-			label: 'Not signed in to Cloudflare',
-			fix: 'npx wrangler login (or set CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID)'
-		});
-	} else {
-		checks.push({
-			id: 'login',
-			status: 'ok',
-			label: `Signed in as ${account.email ?? '(unknown)'} → ${(account.accounts ?? [])
-				.map((/** @type {any} */ a) => a.name)
-				.join(', ')}`
-		});
-	}
-
-	// Independent of the login line: `whoami` answers for the folder's login,
-	// while this follows WRANGLER_PROFILE and account_id like a real command.
-	const target = checkTarget({ env: { ...process.env, COGSEND_ALLOW_ACCOUNT_CHANGE: '' } });
-	checks.push(targetVerdict(target));
+	const login = loginVerdict({ profile: target.profile, whoami: account, reached: target.current });
+	checks.push(login);
+	const signedIn = login.status === 'ok';
+	// Signed out, "could not tell which account" only repeats the line above.
+	if (signedIn || target.verdict !== 'unknown') checks.push(targetVerdict(target));
 	const pin = accountPinVerdict({
 		config,
 		configFile,
@@ -753,7 +786,7 @@ async function main() {
 	const binding = config?.d1_databases?.[0]?.binding ?? 'DB';
 	const bucket = config?.r2_buckets?.[0]?.bucket_name;
 
-	if (account?.loggedIn) {
+	if (signedIn) {
 		const listed = wrangler(['d1', 'list', '--json'], { timeout: 60_000 });
 		const databases = parseD1List(listed.stdout);
 		const found = databases.find((db) => (d1Id ? db.uuid === d1Id : db.name === d1Name));

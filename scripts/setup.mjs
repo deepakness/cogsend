@@ -38,6 +38,8 @@
 // pipe, a CI job, `--dry-run` — that flow cannot complete, so it says which
 // command to run instead. CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID work
 // too, because wrangler reads them and `whoami` reports a signed-in account.
+// With WRANGLER_PROFILE set, `whoami` cannot answer for that profile, so the
+// account is read from a request made through it instead.
 //
 // This is the only way to install: no browser flow can create the account, which
 // is what makes the claim window impossible rather than merely unlikely. It can
@@ -67,7 +69,7 @@ import {
 import { PLACEHOLDER_EMAIL, isPlaceholderValue, readDevVars } from './lib/dev-vars.mjs';
 import { readWorkerSecrets } from './lib/worker-secrets.mjs';
 import { syncMigrations } from './lib/migration-sync.mjs';
-import { guardTarget } from './lib/target-account.mjs';
+import { guardTarget, resolveAccount } from './lib/target-account.mjs';
 import { ask as promptAsk, askSecret as promptAskSecret } from './lib/prompt.mjs';
 import * as ui from './lib/cli.mjs';
 
@@ -368,31 +370,48 @@ async function main() {
 
 	// 1. Who are we deploying as?
 	say('1. Cloudflare account');
-	let { account, raw } = readWhoami();
-	if (!account) fail(`wrangler could not read your account.${outputTail(raw)}`);
-	if (!account.loggedIn) {
-		if (DRY || !process.stdin.isTTY) {
+	const profile = process.env.WRANGLER_PROFILE?.trim();
+	if (profile) {
+		// `whoami` answers for the folder's login, not this profile (see
+		// profileArgs), so the account comes from a request made through it.
+		// Signing a profile in is `wrangler auth create`, not `wrangler login`.
+		const reached = resolveAccount();
+		if (!reached.accountId) {
 			fail(
-				'You are not signed in. Run `npx wrangler login` (an OAuth login — no API token needed).'
+				`could not reach Cloudflare through profile ${profile}: ${reached.reason}\n` +
+					`  sign that profile in with: npx wrangler auth create ${profile}`
 			);
 		}
-		info('not signed in yet — starting the browser login');
-		// Not fatal on its own: the probe below decides, so a login that was
-		// refused (no browser, a closed tab) reads as "still not signed in"
-		// instead of a bare exit code.
-		wrangler(['login'], { stream: true, allowFailure: true });
-		({ account, raw } = readWhoami());
-		if (!account) fail(`wrangler could not read your account after the login.${outputTail(raw)}`);
-		if (!account.loggedIn) fail('Still not signed in. Run `npx wrangler login` and try again.');
-	}
-	const accounts = account.accounts ?? [];
-	if (accounts.length === 0) fail('This login has no Cloudflare account.');
-	ui.ok(
-		`signed in as ${ui.value(account.email)}${accounts.length ? ` on ${ui.value(accounts.map((a) => a.name).join(', '))}` : ''}`
-	);
-	if (accounts.length > 1) {
-		warn('several accounts are available; wrangler picks the default one');
-		note('pin one with "account_id" in wrangler.personal.jsonc (see docs/configuration.md)');
+		ui.ok(
+			`signed in through profile ${ui.value(profile)} on ${ui.value(reached.accountName ?? reached.accountId)}`
+		);
+	} else {
+		let { account, raw } = readWhoami();
+		if (!account) fail(`wrangler could not read your account.${outputTail(raw)}`);
+		if (!account.loggedIn) {
+			if (DRY || !process.stdin.isTTY) {
+				fail(
+					'You are not signed in. Run `npx wrangler login` (an OAuth login — no API token needed).'
+				);
+			}
+			info('not signed in yet — starting the browser login');
+			// Not fatal on its own: the probe below decides, so a login that was
+			// refused (no browser, a closed tab) reads as "still not signed in"
+			// instead of a bare exit code.
+			wrangler(['login'], { stream: true, allowFailure: true });
+			({ account, raw } = readWhoami());
+			if (!account) fail(`wrangler could not read your account after the login.${outputTail(raw)}`);
+			if (!account.loggedIn) fail('Still not signed in. Run `npx wrangler login` and try again.');
+		}
+		const accounts = account.accounts ?? [];
+		if (accounts.length === 0) fail('This login has no Cloudflare account.');
+		ui.ok(
+			`signed in as ${ui.value(account.email)}${accounts.length ? ` on ${ui.value(accounts.map((a) => a.name).join(', '))}` : ''}`
+		);
+		if (accounts.length > 1) {
+			warn('several accounts are available; wrangler picks the default one');
+			note('pin one with "account_id" in wrangler.personal.jsonc (see docs/configuration.md)');
+		}
 	}
 
 	// 2. Names, from the config that will actually be deployed.

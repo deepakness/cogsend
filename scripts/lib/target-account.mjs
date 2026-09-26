@@ -214,10 +214,9 @@ export function resolveAccount({ args = [], run = runWrapper } = {}) {
 	const accountId = accountIdFromLog(log);
 	if (!accountId) return { accountId: null, accountName: null, reason: failureReason(log) };
 
-	// A name belongs to its id whichever login lists it, so the directory's
-	// login can name an account reached through another profile. `whoami`
-	// rejects `--profile`, hence the empty WRANGLER_PROFILE.
-	const who = run(['whoami', '--json'], { WRANGLER_PROFILE: '', [CHECKED_ENV]: 'unknown' });
+	// `whoami` answers for the folder's login, never a profile (see
+	// profileArgs), but a name belongs to its id whichever login lists it.
+	const who = run(['whoami', '--json'], { [CHECKED_ENV]: 'unknown' });
 	let accountName = null;
 	try {
 		const parsed = JSON.parse(who.stdout ?? '');

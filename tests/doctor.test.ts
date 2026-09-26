@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
 	accountPinVerdict,
+	loginVerdict,
 	bucketWasListed,
 	countUnappliedMigrations,
 	evaluateConfig,
@@ -408,5 +409,43 @@ describe('account pinning', () => {
 			profile: 'personal'
 		});
 		expect(check?.status).toBe('ok');
+	});
+});
+
+describe('login verdict', () => {
+	const reached = { accountId: '0123456789abcdef0123456789abcdef', accountName: 'Home' };
+
+	it('trusts whoami without a profile', () => {
+		expect(
+			loginVerdict({
+				whoami: { loggedIn: true, email: 'me@example.com', accounts: [{ name: 'Home' }] }
+			})
+		).toMatchObject({ status: 'ok', label: 'Signed in as me@example.com → Home' });
+		expect(loginVerdict({ whoami: { loggedIn: false } }).status).toBe('fail');
+	});
+
+	it('ignores whoami under a profile, which describes another login', () => {
+		const check = loginVerdict({
+			profile: 'personal',
+			whoami: { loggedIn: false },
+			reached
+		});
+		expect(check).toMatchObject({
+			status: 'ok',
+			label: 'Signed in through profile personal → Home'
+		});
+	});
+
+	it('fails with the profile to sign in when the profile reaches nothing', () => {
+		const check = loginVerdict({
+			profile: 'personal',
+			whoami: { loggedIn: true, email: 'other@example.com' },
+			reached: { accountId: null, accountName: null, reason: 'Not logged in.' }
+		});
+		expect(check).toMatchObject({
+			status: 'fail',
+			detail: 'Not logged in.',
+			fix: 'npx wrangler auth create personal'
+		});
 	});
 });

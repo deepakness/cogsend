@@ -195,13 +195,17 @@ export function effectiveConfigPath(args, exists) {
  * rebuilds — but an explicit `--profile` in the caller's own argv is theirs, not
  * something to double up on.
  *
+ * Never for `whoami`: it refuses the flag ("only works on the currently active
+ * profile") and always answers for the folder's login, so a caller that needs
+ * the profile's account asks ./target-account.mjs instead.
+ *
  * @param {string[]} args the command line as the caller wrote it
  * @param {Record<string, string | undefined>} env
  * @returns {string[]} the flag to append, or none when there is nothing to add
  */
 export function profileArgs(args, env) {
 	const name = env?.WRANGLER_PROFILE?.trim();
-	if (!name) return [];
+	if (!name || args[0] === 'whoami') return [];
 	if (args.some((arg) => arg === '--profile' || arg.startsWith('--profile='))) return [];
 	return ['--profile', name];
 }

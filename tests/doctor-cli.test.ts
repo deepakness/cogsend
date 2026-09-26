@@ -67,11 +67,11 @@ else out('');
 	return dir;
 }
 
-function runDoctor(dir: string) {
+function runDoctor(dir: string, env: Record<string, string> = {}) {
 	const result = spawnSync(process.execPath, ['scripts/doctor.mjs'], {
 		cwd: dir,
 		encoding: 'utf8',
-		env: { ...process.env, NO_COLOR: '1' }
+		env: { ...process.env, NO_COLOR: '1', ...env }
 	});
 	return `${result.stdout}${result.stderr}`;
 }
@@ -136,5 +136,29 @@ describe('doctor CLI', () => {
 		expect(output).toContain(
 			'✓ Commands reach cogsend on 0123456789abcdef0123456789abcdef, where it is deployed'
 		);
+	});
+
+	// The fake's whoami answers for another login (op@example.com), as the real
+	// one does for the folder's login when a profile is set.
+	it('reads the login through WRANGLER_PROFILE, and runs the remote checks', () => {
+		const output = runDoctor(
+			scratchCheckout(['APP_ENCRYPTION_KEY'], { account: '0123456789abcdef0123456789abcdef' }),
+			{ WRANGLER_PROFILE: 'personal' }
+		);
+		expect(output).toContain(
+			'✓ Signed in through profile personal → 0123456789abcdef0123456789abcdef'
+		);
+		expect(output).not.toContain('op@example.com');
+		expect(output).not.toContain('skipped (not signed in)');
+		expect(output).toContain('D1 database cogsend exists');
+	});
+
+	it('names the profile to sign in when it reaches no account', () => {
+		const output = runDoctor(scratchCheckout(['APP_ENCRYPTION_KEY']), {
+			WRANGLER_PROFILE: 'personal'
+		});
+		expect(output).toContain('✗ Could not reach Cloudflare through profile personal');
+		expect(output).toContain('fix: npx wrangler auth create personal');
+		expect(output).toContain('D1 database check skipped (not signed in)');
 	});
 });

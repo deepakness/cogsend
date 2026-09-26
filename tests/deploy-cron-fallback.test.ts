@@ -168,6 +168,10 @@ describe('profile argument handling', () => {
 		]);
 	});
 
+	it('never adds it to whoami, which refuses the flag', () => {
+		expect(profileArgs(['whoami', '--json'], { WRANGLER_PROFILE: 'my-account' })).toEqual([]);
+	});
+
 	it("leaves an explicit profile in the caller's argv alone", () => {
 		const set = { WRANGLER_PROFILE: 'my-account' };
 		expect(profileArgs(['deploy', '--profile', 'other'], set)).toEqual([]);

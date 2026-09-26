@@ -170,14 +170,13 @@ describe('checking the target', () => {
 		);
 	});
 
-	it('probes with the command’s own config and profile, and whoami without a profile', () => {
+	it('probes with the command’s own config and profile', () => {
 		const { args, file } = setup(null);
 		const { run, calls } = fakeRun(HOME);
 		checkTarget({ args: [...args, '--profile', 'personal'], file, env: {}, run });
 		expect(calls[0].args).toEqual(['secret', 'list', ...args, '--profile', 'personal']);
 		expect(calls[0].env.WRANGLER_LOG).toBe('debug');
 		expect(calls[1].args).toEqual(['whoami', '--json']);
-		expect(calls[1].env.WRANGLER_PROFILE).toBe('');
 	});
 
 	it('never refuses on an account it could not read', () => {
