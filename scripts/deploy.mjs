@@ -10,6 +10,7 @@
 import { spawnSync } from 'node:child_process';
 import * as ui from './lib/cli.mjs';
 import { syncMigrations } from './lib/migration-sync.mjs';
+import { guardTarget } from './lib/target-account.mjs';
 import { runWrangler, wranglerOutput } from './lib/wrangler-run.mjs';
 
 /** One line in place of the progress line, then the progress line again. */
@@ -70,6 +71,24 @@ function d1Json(sql) {
 }
 
 ui.headline('Deploying CogSend');
+
+// Before the tests: a deploy to the wrong account should not cost a test run
+// first.
+ui.progress('checking the Cloudflare account');
+guardTarget({
+	print: (headline, notes, verdict) => {
+		ui.clearProgress();
+		(verdict === 'unknown' ? ui.warn : ui.ok)(headline);
+		for (const line of notes) ui.note(line);
+	},
+	refuse: (headline, notes) => {
+		ui.clearProgress();
+		ui.error(`${headline}\n`);
+		for (const line of notes) ui.note(line);
+		ui.error('nothing was deployed.');
+		process.exit(1);
+	}
+});
 
 const tests = run('the test suite', 'npx', ['vitest', 'run'], 'running the test suite');
 ui.ok(`tests passed in ${ui.duration(tests.elapsedMs)}`);

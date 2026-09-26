@@ -172,6 +172,21 @@ export function withoutConfigArg(args) {
 	return out;
 }
 
+export const PERSONAL_CONFIG = 'wrangler.personal.jsonc';
+export const COMMITTED_CONFIG = 'wrangler.jsonc';
+
+/**
+ * The config file a command uses: an explicit `--config`, else the personal
+ * override when it exists, else the committed one.
+ *
+ * @param {string[]} args
+ * @param {(path: string) => boolean} exists
+ * @returns {string}
+ */
+export function effectiveConfigPath(args, exists) {
+	return configArg(args) ?? (exists(PERSONAL_CONFIG) ? PERSONAL_CONFIG : COMMITTED_CONFIG);
+}
+
 /**
  * `--profile <name>` for the account a command runs against.
  *

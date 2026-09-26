@@ -69,8 +69,11 @@ process.exit(0);
 			.split('\n')
 			.map((line) => JSON.parse(line).at(-1) as string);
 
+	/** Writes only: the account check's `secret list` and `whoami` are reads too. */
 	function statements(root: string) {
-		return calls(root).filter((sql) => !sql.startsWith('SELECT'));
+		return calls(root).filter(
+			(sql) => !sql.startsWith('SELECT') && !/^wrangler (secret list|whoami)\b/.test(sql)
+		);
 	}
 
 	it('sets a new password, revokes every session, and keeps the authenticator', () => {

@@ -22,6 +22,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PLACEHOLDER_VALUES, readDevVars } from './lib/dev-vars.mjs';
+import { checkTarget, explainTarget } from './lib/target-account.mjs';
 
 /**
  * @typedef {{ id: string, status: 'ok' | 'warn' | 'fail' | 'skip', label: string, detail?: string, fix?: string }} Check
@@ -621,6 +622,69 @@ async function probeApp(appUrl) {
 	}
 }
 
+/**
+ * Whether the config pins the Cloudflare account.
+ *
+ * Without `account_id` a command goes wherever the active login points, which
+ * for someone with more than one account depends on the shell and the folder.
+ * With a single account there is nothing to mix up, so no line at all.
+ *
+ * @param {{ config: any, configFile: string, profile?: string | null, accountCount?: number, recorded?: string | null }} input
+ * @returns {Check | null}
+ */
+export function accountPinVerdict({ config, configFile, profile, accountCount = 0, recorded }) {
+	const id = config?.account_id;
+	if (typeof id === 'string' && id) {
+		return { id: 'account-pin', status: 'ok', label: `Account pinned in ${configFile}: ${id}` };
+	}
+	if (!profile && accountCount <= 1) return null;
+	return {
+		id: 'account-pin',
+		status: 'warn',
+		label: `No account_id in ${configFile}`,
+		detail: profile
+			? `every command needs WRANGLER_PROFILE=${profile}; one without it uses another login`
+			: 'commands use whichever login this shell and folder have',
+		fix: `Add "account_id": "${recorded ?? '<your account id>'}" to ${PERSONAL_CONFIG}`
+	};
+}
+
+/**
+ * The account commands reach, against the one this checkout deployed to.
+ *
+ * @param {import('./lib/target-account.mjs').TargetCheck} check
+ * @returns {Check}
+ */
+export function targetVerdict(check) {
+	const reached = explainTarget({ ...check, profile: null }).headline.replace(/^target: /, '');
+	if (check.verdict === 'unknown') {
+		return {
+			id: 'target',
+			status: 'warn',
+			label: 'Could not tell which Cloudflare account commands reach',
+			detail: check.current.reason
+		};
+	}
+	if (check.verdict === 'match') {
+		return { id: 'target', status: 'ok', label: `Commands reach ${reached}, where it is deployed` };
+	}
+	if (check.verdict === 'new') {
+		return {
+			id: 'target',
+			status: 'ok',
+			label: `Commands reach ${reached}`,
+			detail: 'no deploy recorded from this checkout yet'
+		};
+	}
+	return {
+		id: 'target',
+		status: 'fail',
+		label: `Commands reach account ${check.current.accountId}, but ${check.worker} was deployed to ${check.recorded}`,
+		detail: 'deploys, secrets and migrations from here refuse to run',
+		fix: `Set WRANGLER_PROFILE, or add "account_id": "${check.recorded}" to ${PERSONAL_CONFIG}`
+	};
+}
+
 async function main() {
 	const argv = process.argv.slice(2);
 	/** @param {string} name @returns {string | undefined} */
@@ -670,6 +734,19 @@ async function main() {
 				.join(', ')}`
 		});
 	}
+
+	// Independent of the login line: `whoami` answers for the folder's login,
+	// while this follows WRANGLER_PROFILE and account_id like a real command.
+	const target = checkTarget({ env: { ...process.env, COGSEND_ALLOW_ACCOUNT_CHANGE: '' } });
+	checks.push(targetVerdict(target));
+	const pin = accountPinVerdict({
+		config,
+		configFile,
+		profile: target.profile,
+		accountCount: account?.accounts?.length ?? 0,
+		recorded: target.recorded
+	});
+	if (pin) checks.push(pin);
 
 	const d1Name = config?.d1_databases?.[0]?.database_name;
 	const d1Id = config?.d1_databases?.[0]?.database_id;

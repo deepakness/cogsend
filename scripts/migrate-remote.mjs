@@ -18,6 +18,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ui from './lib/cli.mjs';
 import { syncMigrations } from './lib/migration-sync.mjs';
+import { guardTarget } from './lib/target-account.mjs';
 import { runWrangler, wranglerOutput } from './lib/wrangler-run.mjs';
 
 process.chdir(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
@@ -56,6 +57,21 @@ function d1Json(sql) {
 	if (result.status !== 0) fail(result, 'checking the database');
 	const parsed = JSON.parse(result.stdout);
 	return parsed[0]?.results ?? [];
+}
+
+if (!local) {
+	guardTarget({
+		args: passthrough,
+		print: (headline, notes, verdict) => {
+			(verdict === 'unknown' ? ui.warn : ui.ok)(headline);
+			for (const line of notes) ui.note(line);
+		},
+		refuse: (headline, notes) => {
+			ui.error(`${headline}\n`);
+			for (const line of notes) ui.note(line);
+			process.exit(1);
+		}
+	});
 }
 
 const { recorded } = await syncMigrations({

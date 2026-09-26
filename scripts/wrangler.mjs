@@ -10,7 +10,12 @@
  * 2. Profile: when WRANGLER_PROFILE is set, `--profile` is added. Multi-account
  *    users pick an account with `WRANGLER_PROFILE=my-account npm run deploy`
  *    instead of the repo hardcoding a profile name.
- * 3. Cron quota: a deploy that Cloudflare refuses only because the account has
+ * 3. Account: a command that writes (deploy, secrets, remote D1) first checks
+ *    that it reaches the account this checkout last deployed to, and refuses
+ *    when it does not; a deploy records that account. See
+ *    ./lib/target-account.mjs. A script that already checked says so through
+ *    COGSEND_TARGET_CHECKED, so its calls are not each checked again.
+ * 4. Cron quota: a deploy that Cloudflare refuses only because the account has
  *    no cron-trigger slot left (free plan: five per account) is retried once
  *    with the trigger removed, so the Worker still ships and the build is not
  *    marked failed. The outcome is recorded in D1 for the app and
@@ -26,10 +31,10 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
 	NO_CRON_CONFIG_NAME,
-	configArg,
 	cronCount,
 	cronFallbackWarning,
 	cronStateValue,
+	effectiveConfigPath as configPathFor,
 	isCronQuotaError,
 	parseJsonc,
 	profileArgs,
@@ -37,12 +42,20 @@ import {
 	withoutCronTriggers
 } from './lib/wrangler-config.mjs';
 import { isToolNoise, isVerbose } from './lib/cli.mjs';
+import {
+	CHECKED_ENV,
+	checkTarget,
+	explainTarget,
+	isGuardedCommand,
+	recordAccount,
+	workerName
+} from './lib/target-account.mjs';
 
 const PERSONAL_CONFIG = 'wrangler.personal.jsonc';
+const ACCOUNT_ID = /^[0-9a-f]{32}$/;
 /** The D1 note is metadata: give it a minute, then carry on regardless. The
  *  environment override exists so a test can shrink it. */
 const NOTE_TIMEOUT_MS = Number(process.env.COGSEND_NOTE_TIMEOUT_MS) || 60_000;
-const COMMITTED_CONFIG = 'wrangler.jsonc';
 // `--verbose` is ours, not wrangler's: it is stripped before the command line is
 // built, so `node scripts/wrangler.mjs deploy --verbose` works too.
 const args = process.argv.slice(2).filter((arg) => arg !== '--verbose');
@@ -176,7 +189,7 @@ function runWrangler(wranglerArgs, { capture = false, quiet = false, timeoutMs =
 
 /** The config file this run actually deploys. */
 function effectiveConfigPath() {
-	return configArg(args) ?? (existsSync(PERSONAL_CONFIG) ? PERSONAL_CONFIG : COMMITTED_CONFIG);
+	return configPathFor(args, existsSync);
 }
 
 /** Read the config that will be deployed, or null when it is unreadable. */
@@ -219,6 +232,17 @@ const isDeploy = args[0] === 'deploy';
 const isDryRun = hasFlag('--dry-run');
 const strict = ['1', 'true', 'yes'].includes((process.env.COGSEND_STRICT_CRON ?? '').toLowerCase());
 
+const alreadyChecked = process.env[CHECKED_ENV];
+let targetAccount = ACCOUNT_ID.test(alreadyChecked ?? '') ? alreadyChecked : null;
+if (isGuardedCommand(args) && !alreadyChecked) {
+	const check = checkTarget({ args });
+	const told = explainTarget(check);
+	console.error(told.headline);
+	for (const line of told.notes) console.error(`  ${line}`);
+	if (told.refuse) process.exit(1);
+	targetAccount = check.current.accountId;
+}
+
 const result = await runWrangler(fullArgs, { capture: isDeploy });
 let status = result.status;
 let fellBack = false;
@@ -255,6 +279,13 @@ if (isDeploy && status !== 0 && !strict && isCronQuotaError(result.output)) {
 		} finally {
 			rmSync(tempPath, { force: true });
 		}
+	}
+}
+
+if (isDeploy && !isDryRun && status === 0 && targetAccount) {
+	const worker = workerName(args);
+	if (worker && recordAccount(worker, targetAccount)) {
+		console.error(`recorded: ${worker} is deployed to account ${targetAccount}`);
 	}
 }
 

@@ -44,11 +44,23 @@ describe('npm run secrets:put', () => {
 	function run(
 		devVars: string,
 		args: string[] = [],
-		{ secretList = null }: { secretList?: string[] | null } = {}
+		{
+			secretList = null,
+			account = null,
+			deployedTo = null
+		}: { secretList?: string[] | null; account?: string | null; deployedTo?: string | null } = {}
 	) {
 		const created = mkdtempSync(join(tmpdir(), 'cogsend-secrets-'));
 		dir = created;
 		writeFileSync(join(created, '.dev.vars'), devVars);
+		if (deployedTo) {
+			writeFileSync(join(created, 'wrangler.jsonc'), JSON.stringify({ name: 'cogsend' }));
+			mkdirSync(join(created, '.wrangler'));
+			writeFileSync(
+				join(created, '.wrangler', 'deployed-accounts.json'),
+				JSON.stringify({ cogsend: { accountId: deployedTo } })
+			);
+		}
 		const bin = join(created, 'bin');
 		mkdirSync(bin);
 		const listJson = secretList
@@ -62,6 +74,11 @@ describe('npm run secrets:put', () => {
 const { appendFileSync } = require('node:fs');
 const args = process.argv.slice(2);
 const list = ${JSON.stringify(listJson)};
+const account = ${JSON.stringify(account)};
+if (args.includes('list') && process.env.WRANGLER_LOG === 'debug') {
+	if (account) process.stderr.write('GET https://api.cloudflare.com/client/v4/accounts/' + account + '/workers/scripts/cogsend/secrets\\n');
+	process.exit(1);
+}
 if (args.includes('list')) {
 	if (list) process.stdout.write(list);
 	process.exit(0);
@@ -208,6 +225,28 @@ process.stdin.resume();
 		]);
 		expect(result.stderr).toContain('not uploaded: LINKEDIN_CLIENT_SECRET');
 		expect(result.status).toBe(1);
+	});
+
+	it('refuses to upload to another account than the one deployed to', () => {
+		const { result, puts } = run('THREADS_APP_ID=123', ['THREADS_APP_ID'], {
+			account: 'fedcba9876543210fedcba9876543210',
+			deployedTo: '0123456789abcdef0123456789abcdef'
+		});
+		expect(result.stderr).toContain(
+			'refusing: this checkout deployed cogsend to account 0123456789abcdef0123456789abcdef'
+		);
+		expect(result.stderr).toContain('nothing was uploaded');
+		expect(puts).toEqual([]);
+		expect(result.status).toBe(1);
+	});
+
+	it('names the account it uploads to', () => {
+		const { result, puts } = run('THREADS_APP_ID=123', ['THREADS_APP_ID'], {
+			account: '0123456789abcdef0123456789abcdef',
+			deployedTo: '0123456789abcdef0123456789abcdef'
+		});
+		expect(result.stdout).toContain('target: cogsend on 0123456789abcdef0123456789abcdef');
+		expect(puts.map((c) => c.args.at(-1))).toEqual(['THREADS_APP_ID']);
 	});
 
 	it('uploads a repeated key once, not once per mention', () => {

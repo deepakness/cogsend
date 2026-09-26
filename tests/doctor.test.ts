@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+	accountPinVerdict,
 	bucketWasListed,
 	countUnappliedMigrations,
 	evaluateConfig,
@@ -370,5 +371,42 @@ describe('check ids stay stable', () => {
 			'r2-binding',
 			'cron'
 		]);
+	});
+});
+
+describe('account pinning', () => {
+	const recorded = '0123456789abcdef0123456789abcdef';
+
+	it('says nothing for a single account with no profile', () => {
+		expect(
+			accountPinVerdict({ config: {}, configFile: 'wrangler.jsonc', accountCount: 1 })
+		).toBeNull();
+	});
+
+	it('warns when a profile picks the account, and suggests the deployed id', () => {
+		const check = accountPinVerdict({
+			config: {},
+			configFile: 'wrangler.personal.jsonc',
+			profile: 'personal',
+			recorded
+		});
+		expect(check?.status).toBe('warn');
+		expect(check?.detail).toContain('WRANGLER_PROFILE=personal');
+		expect(check?.fix).toBe(`Add "account_id": "${recorded}" to wrangler.personal.jsonc`);
+	});
+
+	it('warns when the login has several accounts', () => {
+		const check = accountPinVerdict({ config: {}, configFile: 'wrangler.jsonc', accountCount: 2 });
+		expect(check?.status).toBe('warn');
+		expect(check?.fix).toContain('<your account id>');
+	});
+
+	it('is satisfied by an account_id', () => {
+		const check = accountPinVerdict({
+			config: { account_id: recorded },
+			configFile: 'wrangler.personal.jsonc',
+			profile: 'personal'
+		});
+		expect(check?.status).toBe('ok');
 	});
 });

@@ -7,6 +7,7 @@ import {
 	parseDevVars,
 	readDevVarsText
 } from './lib/dev-vars.mjs';
+import { guardTarget } from './lib/target-account.mjs';
 import { readWorkerSecrets } from './lib/worker-secrets.mjs';
 
 const DEV_VARS = '.dev.vars';
@@ -163,6 +164,22 @@ for (const key of wanted) {
 		console.error('  (your production URL, e.g. https://cogsend.<account>.workers.dev)');
 		skipped.push(key);
 		continue;
+	}
+	// Checked at the first upload rather than up front, so a run that only
+	// skips never waits on Cloudflare.
+	if (!uploaded.length) {
+		guardTarget({
+			print: (headline, notes) => {
+				console.log(headline);
+				for (const line of notes) console.log(`  ${line}`);
+			},
+			refuse: (headline, notes) => {
+				console.error(headline);
+				for (const line of notes) console.error(`  ${line}`);
+				console.error('nothing was uploaded');
+				process.exit(1);
+			}
+		});
 	}
 	console.log(`uploading ${key}`);
 	const result = spawnSync('node', ['scripts/wrangler.mjs', 'secret', 'put', key], {

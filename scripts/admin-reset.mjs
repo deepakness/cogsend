@@ -41,6 +41,7 @@ import {
 	resetAccount
 } from './lib/account.mjs';
 import { ask, askSecret } from './lib/prompt.mjs';
+import { guardTarget } from './lib/target-account.mjs';
 
 process.chdir(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
 
@@ -87,6 +88,14 @@ async function main() {
 	if (has('--strong-kdf')) {
 		fail('--strong-kdf was removed: Workers cannot verify PBKDF2 counts above 100,000');
 	}
+
+	guardTarget({
+		print: (headline, notes) => {
+			info(headline);
+			for (const line of notes) info(line);
+		},
+		refuse: (headline, notes) => fail([headline, ...notes.map((line) => `  ${line}`)].join('\n'))
+	});
 
 	const account = await readAccount({ wrangler });
 	if (!account.ok) {

@@ -13,9 +13,20 @@
  * it removes the chance that a test which forgets to fake something reaches a
  * live account.
  *
+ * The account check's variables go for the same reason: `npm run deploy:release`
+ * sets COGSEND_TARGET_CHECKED before it runs this suite, and an operator moving
+ * an instance sets COGSEND_ALLOW_ACCOUNT_CHANGE, and either one turns the
+ * refusal the suite asserts into a pass.
+ *
  * Deleted rather than blanked: an empty string is still a value to anything that
  * asks whether a variable is set.
  */
-for (const name of ['WRANGLER_PROFILE', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']) {
+for (const name of [
+	'WRANGLER_PROFILE',
+	'CLOUDFLARE_API_TOKEN',
+	'CLOUDFLARE_ACCOUNT_ID',
+	'COGSEND_TARGET_CHECKED',
+	'COGSEND_ALLOW_ACCOUNT_CHANGE'
+]) {
 	delete process.env[name];
 }

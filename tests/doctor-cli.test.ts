@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -20,7 +20,13 @@ afterEach(() => {
 	while (dirs.length) rmSync(dirs.pop() as string, { recursive: true, force: true });
 });
 
-function scratchCheckout(secretNames: string[]) {
+function scratchCheckout(
+	secretNames: string[],
+	{
+		account = null,
+		deployedTo = null
+	}: { account?: string | null; deployedTo?: string | null } = {}
+) {
 	const dir = mkdtempSync(join(tmpdir(), 'cogsend-doctor-'));
 	dirs.push(dir);
 	cpSync('scripts', join(dir, 'scripts'), { recursive: true });
@@ -36,6 +42,11 @@ function scratchCheckout(secretNames: string[]) {
 	writeFileSync(
 		join(dir, 'scripts', 'wrangler.mjs'),
 		`const args = process.argv.slice(2);
+if (process.env.WRANGLER_LOG === 'debug') {
+	const account = ${JSON.stringify(account)};
+	if (account) process.stderr.write('GET https://api.cloudflare.com/client/v4/accounts/' + account + '/workers/scripts/cogsend/secrets\\n');
+	process.exit(1);
+}
 const out = (value) => process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value));
 if (args[0] === 'whoami') out({ loggedIn: true, email: 'op@example.com', accounts: [{ name: 'Acct' }] });
 else if (args[0] === 'd1' && args[1] === 'list') out([{ uuid: 'db-1', name: 'cogsend' }]);
@@ -46,6 +57,13 @@ else if (args[0] === 'deployments') out('Deployed\\n  Created: 1 minute ago');
 else out('');
 `
 	);
+	if (deployedTo) {
+		mkdirSync(join(dir, '.wrangler'));
+		writeFileSync(
+			join(dir, '.wrangler', 'deployed-accounts.json'),
+			JSON.stringify({ cogsend: { accountId: deployedTo } })
+		);
+	}
 	return dir;
 }
 
@@ -94,5 +112,29 @@ describe('doctor CLI', () => {
 		);
 		expect(output).toContain('LinkedIn, Threads and X have app credentials');
 		expect(output).toContain('all five platforms can be connected');
+	});
+
+	it('fails when commands reach another account than the deploy', () => {
+		const output = runDoctor(
+			scratchCheckout(['APP_ENCRYPTION_KEY'], {
+				account: 'fedcba9876543210fedcba9876543210',
+				deployedTo: '0123456789abcdef0123456789abcdef'
+			})
+		);
+		expect(output).toContain(
+			'✗ Commands reach account fedcba9876543210fedcba9876543210, but cogsend was deployed to 0123456789abcdef0123456789abcdef'
+		);
+	});
+
+	it('confirms the account commands reach is the deployed one', () => {
+		const output = runDoctor(
+			scratchCheckout(['APP_ENCRYPTION_KEY'], {
+				account: '0123456789abcdef0123456789abcdef',
+				deployedTo: '0123456789abcdef0123456789abcdef'
+			})
+		);
+		expect(output).toContain(
+			'✓ Commands reach cogsend on 0123456789abcdef0123456789abcdef, where it is deployed'
+		);
 	});
 });

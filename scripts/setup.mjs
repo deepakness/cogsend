@@ -67,6 +67,7 @@ import {
 import { PLACEHOLDER_EMAIL, isPlaceholderValue, readDevVars } from './lib/dev-vars.mjs';
 import { readWorkerSecrets } from './lib/worker-secrets.mjs';
 import { syncMigrations } from './lib/migration-sync.mjs';
+import { guardTarget } from './lib/target-account.mjs';
 import { ask as promptAsk, askSecret as promptAskSecret } from './lib/prompt.mjs';
 import * as ui from './lib/cli.mjs';
 
@@ -391,7 +392,7 @@ async function main() {
 	);
 	if (accounts.length > 1) {
 		warn('several accounts are available; wrangler picks the default one');
-		note('set WRANGLER_PROFILE to choose another (see docs/configuration.md)');
+		note('pin one with "account_id" in wrangler.personal.jsonc (see docs/configuration.md)');
 	}
 
 	// 2. Names, from the config that will actually be deployed.
@@ -430,6 +431,21 @@ async function main() {
 		patchPersonalConfig({ bucket });
 		info(`recorded ${bucket} in ${PERSONAL_CONFIG}`);
 	}
+
+	// After the names are settled, before the first write to Cloudflare: the
+	// record is per Worker, and `--name` can make this a different one.
+	guardTarget({
+		worker: personalExists ? effective.name : name,
+		print: (headline, notes, verdict) => {
+			(verdict === 'unknown' ? ui.warn : ui.ok)(headline);
+			for (const line of notes) note(line);
+		},
+		refuse: (headline, notes) => {
+			ui.error(`${headline}\n`);
+			for (const line of notes) note(line);
+			process.exit(1);
+		}
+	});
 
 	// 3. D1.
 	say('3. D1 database');
