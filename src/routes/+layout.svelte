@@ -14,6 +14,7 @@
 	import { fly } from 'svelte/transition';
 	import favicon from '$lib/assets/favicon.svg';
 	import faviconDark from '$lib/assets/favicon-dark.svg';
+	import logoGlyph from '$lib/assets/logo-glyph.svg';
 	import { menuNav } from '$lib/components/menu-nav';
 
 	let workspaceTrigger: HTMLButtonElement | null = $state(null);
@@ -127,12 +128,7 @@
 					aria-controls="workspace-menu"
 					aria-label="Workspace menu"
 				>
-					<img
-						src={favicon}
-						alt=""
-						class="h-7 w-7 rounded-lg shadow-sm ring-1 ring-stone-200"
-						aria-hidden="true"
-					/>
+					<img src={logoGlyph} alt="" class="h-7 w-7 p-1" aria-hidden="true" />
 					<span class="text-[14px] font-extrabold tracking-tight text-stone-900"
 						>{data.appName}</span
 					>
