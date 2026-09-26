@@ -953,8 +953,10 @@ export function isRetryableError(message: string): boolean {
 	if (lower.includes('grapheme') || lower.includes('characters on this')) return false;
 	if (lower.includes('segment needs') || lower.includes('empty')) return false;
 	if (lower.includes('max 4 images') || lower.includes('max 4 photos')) return false;
-	if (lower.includes('max 1mb') || lower.includes('max 5mb') || lower.includes('15mb'))
-		return false;
+	// Any per-file size cap ("max 2MB per image", "max 15MB per GIF"). Matched
+	// by shape rather than by number, so changing a cap cannot turn a
+	// permanent refusal into a retry storm.
+	if (/max \d+mb/.test(lower)) return false;
 	if (lower.includes('x max 280') || lower.includes('max 1 cashtag')) return false;
 	// Video while ENABLE_VIDEO_UPLOAD is off: only the operator can change this,
 	// so retrying on a backoff wastes the attempt budget and buries the reason.

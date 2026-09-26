@@ -523,6 +523,8 @@ describe('publishTarget integration', () => {
 		expect(isRetryableError('Target cancelled')).toBe(false);
 		expect(isRetryableError('Already scheduled — cancel')).toBe(false);
 		expect(isRetryableError('Bluesky allows max 1MB per image')).toBe(false);
+		expect(isRetryableError('Bluesky allows max 2MB per image')).toBe(false);
+		expect(isRetryableError('X allows max 15MB per GIF')).toBe(false);
 		expect(isRetryableError('Text exceeds 3000 UTF-8 bytes (3100)')).toBe(false);
 		expect(isRetryableError('Mastodon allows max 16MB per image')).toBe(false);
 	});

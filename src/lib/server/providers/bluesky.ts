@@ -3,6 +3,7 @@ import { extractFirstUrl } from '$lib/domain/links';
 import { fetchOgImage, fetchOpenGraph } from '../opengraph';
 import { isBlockedInstanceHost } from '$lib/domain/instance-host';
 import { validateBlueskyText } from '$lib/domain/validation/text';
+import { BLUESKY_MAX_IMAGE_BYTES } from '$lib/domain/media-limits';
 import type {
 	ConnectionCredentials,
 	FetchLike,
@@ -368,7 +369,7 @@ export const blueskyProvider: PlatformProvider = {
 	id: 'bluesky',
 	capabilities: {
 		maxImages: 4,
-		maxImageBytes: 1_000_000,
+		maxImageBytes: BLUESKY_MAX_IMAGE_BYTES,
 		supportsCW: false,
 		supportsVisibility: false,
 		supportsThreads: true
@@ -409,10 +410,10 @@ export const blueskyProvider: PlatformProvider = {
 						message: 'Bluesky does not support video — post it to LinkedIn',
 						code: 'no_video'
 					});
-				} else if (mediaByteLength(m) > 1_000_000) {
+				} else if (mediaByteLength(m) > BLUESKY_MAX_IMAGE_BYTES) {
 					issues.push({
 						field: `thread[${i}].media`,
-						message: 'Bluesky allows max 1MB per image',
+						message: 'Bluesky allows max 2MB per image',
 						code: 'max_image_bytes'
 					});
 				}

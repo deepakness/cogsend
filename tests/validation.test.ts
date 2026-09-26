@@ -87,31 +87,31 @@ describe('buildLinkFacets', () => {
 });
 
 describe('bluesky media size validation', () => {
-	it('rejects path-based media when size field exceeds 1MB', () => {
+	it('rejects path-based media when size field exceeds 2MB', () => {
 		const issues = blueskyProvider.validate({
 			text: 'pic',
-			media: [{ storageKey: 'huge.png', size: 1_000_001, mime: 'image/png' }]
+			media: [{ storageKey: 'huge.png', size: 2_000_001, mime: 'image/png' }]
 		});
 		expect(issues.some((i) => i.code === 'max_image_bytes')).toBe(true);
 	});
-	it('rejects a 1.5MB image that the old 2MB cap allowed', () => {
+	it('allows a 1.5MB image that the old 1MB cap refused', () => {
 		const issues = blueskyProvider.validate({
 			text: 'pic',
 			media: [{ bytes: new Uint8Array(1_500_000), mime: 'image/png' }]
 		});
-		expect(issues.some((i) => i.code === 'max_image_bytes')).toBe(true);
+		expect(issues.some((i) => i.code === 'max_image_bytes')).toBe(false);
 	});
-	it('allows under 2MB via size field', () => {
+	it('allows exactly 2MB via size field', () => {
 		const issues = blueskyProvider.validate({
 			text: 'pic',
-			media: [{ storageKey: 'ok.png', size: 100_000, mime: 'image/png', alt: 'ok' }]
+			media: [{ storageKey: 'ok.png', size: 2_000_000, mime: 'image/png', alt: 'ok' }]
 		});
 		expect(issues.some((i) => i.code === 'max_image_bytes')).toBe(false);
 	});
 	it('rejects oversized bytes buffer', () => {
 		const issues = blueskyProvider.validate({
 			text: 'pic',
-			media: [{ bytes: new Uint8Array(1_000_001), mime: 'image/png' }]
+			media: [{ bytes: new Uint8Array(2_000_001), mime: 'image/png' }]
 		});
 		expect(issues.some((i) => i.code === 'max_image_bytes')).toBe(true);
 	});

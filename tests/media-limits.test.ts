@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_VIDEO_BYTES, validateVideoUpload } from '$lib/domain/media-limits';
+import { MAX_VIDEO_BYTES, mediaSizeProblem, validateVideoUpload } from '$lib/domain/media-limits';
 
 /** `ftyp` at offset 4 is what `looksLikeMp4` sniffs. */
 function mp4(size: number): Uint8Array {
@@ -45,5 +45,30 @@ describe('validateVideoUpload', () => {
 		// Fewer than 8 bytes cannot carry `ftyp` at offset 4.
 		const tiny = new Uint8Array([0x66, 0x74, 0x79, 0x70]);
 		expect(validateVideoUpload({ mime: 'video/mp4', size: 4, bytes: tiny }).ok).toBe(false);
+	});
+});
+
+describe('mediaSizeProblem', () => {
+	const png = (size: number) => ({ mime: 'image/png', size });
+
+	it('blocks an image over a selected platform cap', () => {
+		expect(mediaSizeProblem(['bluesky'], [png(2_000_001)])).toBe(
+			"An image is over Bluesky's 2MB limit — remove it or uncheck Bluesky"
+		);
+		expect(mediaSizeProblem(['x'], [png(5_000_001)])).toContain("X's 5MB");
+	});
+
+	it('ignores platforms that are not selected', () => {
+		expect(mediaSizeProblem(['mastodon', 'linkedin'], [png(3_000_000)])).toBeNull();
+	});
+
+	it('gives GIFs on X their larger cap', () => {
+		expect(mediaSizeProblem(['x'], [{ mime: 'image/gif', size: 10_000_000 }])).toBeNull();
+		expect(mediaSizeProblem(['x'], [{ mime: 'image/gif', size: 15_000_001 }])).toContain('15MB');
+	});
+
+	it('leaves video and unknown sizes to the providers', () => {
+		expect(mediaSizeProblem(['bluesky'], [{ mime: 'video/mp4', size: 50_000_000 }])).toBeNull();
+		expect(mediaSizeProblem(['bluesky'], [{ mime: 'image/png' }])).toBeNull();
 	});
 });

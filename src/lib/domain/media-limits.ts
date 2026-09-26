@@ -1,13 +1,16 @@
 export const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
 export const MAX_IMAGE_BYTES = 16_000_000;
-export const BLUESKY_MAX_IMAGE_BYTES = 1_000_000;
+// app.bsky.embed.images raised the blob cap from 1MB to 2MB. The link-card
+// thumb (app.bsky.embed.external) is still 1MB, so it keeps its own limit.
+export const BLUESKY_MAX_IMAGE_BYTES = 2_000_000;
 export const LINKEDIN_MAX_IMAGE_BYTES = 8_000_000;
 // LinkedIn combines a flattened thread into one post, so this is a per-post
 // cap. The provider imports this, so the two cannot drift.
 export const LINKEDIN_MAX_IMAGES = 4;
 export const X_MAX_IMAGE_BYTES = 5_000_000;
 export const X_MAX_GIF_BYTES = 15_000_000;
+export const THREADS_MAX_IMAGE_BYTES = 8_000_000;
 export const MAX_IMAGES_PER_SEGMENT = 4;
 
 // LinkedIn video posts: single mp4 per post. 95MB keeps uploads under the
@@ -113,6 +116,41 @@ export function validateImageUpload(input: {
 		return { ok: false, message: `File too large (max ${mb}MB)` };
 	}
 	return { ok: true, mime };
+}
+
+const PLATFORM_LABEL = { bluesky: 'Bluesky', linkedin: 'LinkedIn', threads: 'Threads', x: 'X' };
+
+function imageCap(platform: string, mime: string): number | null {
+	if (platform === 'bluesky') return BLUESKY_MAX_IMAGE_BYTES;
+	if (platform === 'linkedin') return LINKEDIN_MAX_IMAGE_BYTES;
+	if (platform === 'threads') return THREADS_MAX_IMAGE_BYTES;
+	if (platform === 'x') return mime === 'image/gif' ? X_MAX_GIF_BYTES : X_MAX_IMAGE_BYTES;
+	return null;
+}
+
+/**
+ * The first attached image a selected platform would refuse for its size, as
+ * a message to show before publishing, or null. The providers refuse the same
+ * image at publish time; checking here stops a guaranteed failure from being
+ * scheduled. Video is left to the providers' own no-video checks.
+ */
+export function mediaSizeProblem(
+	platforms: Iterable<string>,
+	media: { mime: string; size?: number }[]
+): string | null {
+	for (const platform of platforms) {
+		for (const m of media) {
+			const mime = (m.mime || '').toLowerCase();
+			if (mime.startsWith('video/') || m.size === undefined) continue;
+			const cap = imageCap(platform, mime);
+			if (cap !== null && m.size > cap) {
+				const label = PLATFORM_LABEL[platform as keyof typeof PLATFORM_LABEL];
+				const mb = cap / 1_000_000;
+				return `An image is over ${label}'s ${mb}MB limit — remove it or uncheck ${label}`;
+			}
+		}
+	}
+	return null;
 }
 
 export function canAttachMoreImages(currentCount: number, max = MAX_IMAGES_PER_SEGMENT): boolean {

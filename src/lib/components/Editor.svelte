@@ -30,11 +30,14 @@
 		BLUESKY_MAX_IMAGE_BYTES,
 		LINKEDIN_MAX_IMAGES,
 		LINKEDIN_MAX_IMAGE_BYTES,
+		THREADS_MAX_IMAGE_BYTES,
 		X_MAX_GIF_BYTES,
 		X_MAX_IMAGE_BYTES,
 		groupMediaBySegment,
+		mediaSizeProblem,
 		remapSegmentIndexAfterRemoval
 	} from '$lib/domain/media-limits';
+	import { shrinkToFit } from '$lib/components/shrink-image';
 	import { persistMediaLayout, type MediaMove } from '$lib/domain/media-sync';
 	import {
 		customizePlatformBody,
@@ -1085,6 +1088,14 @@
 			showToast(linkedinMediaProblem ?? 'LinkedIn cannot take this media', 'warn');
 			return;
 		}
+		const sizeProblem = mediaSizeProblem(
+			connectionIds.map(platformOf).filter((p) => p !== undefined),
+			media
+		);
+		if (sizeProblem) {
+			showToast(sizeProblem, 'warn');
+			return;
+		}
 		if (overSelectedLimit) {
 			showToast('A post is over the character limit', 'warn');
 			return;
@@ -1418,6 +1429,11 @@
 			showToast(linkedinMediaProblem ?? 'LinkedIn cannot take this media', 'warn');
 			return;
 		}
+		const sizeProblem = mediaSizeProblem(selectedPlatforms, media);
+		if (sizeProblem) {
+			showToast(sizeProblem, 'warn');
+			return;
+		}
 		if (overSelectedLimit) {
 			showToast('A post is over the character limit', 'warn');
 			return;
@@ -1466,10 +1482,10 @@
 	}
 
 	async function attachFilesToSegment(segmentIndex: number, files: File[]) {
-		const images = files.filter(
+		const picked = files.filter(
 			(f) => f.type.startsWith('image/') || (videoEnabled && f.type === 'video/mp4')
 		);
-		if (!images.length) {
+		if (!picked.length) {
 			showToast(
 				videoEnabled
 					? 'Only image files (PNG, JPEG, WebP, GIF) and MP4 video are supported'
@@ -1478,6 +1494,11 @@
 			);
 			return;
 		}
+		// Shrink to Bluesky's cap, the strictest one, whatever is selected now:
+		// the file is stored once and may be published anywhere later.
+		uploadingSegment = segmentIndex;
+		const images: File[] = [];
+		for (const f of picked) images.push(await shrinkToFit(f, BLUESKY_MAX_IMAGE_BYTES));
 		const blueskySelected = connections.some((c) => selected.has(c.id) && c.platform === 'bluesky');
 		const linkedinSelected = connections.some(
 			(c) => selected.has(c.id) && c.platform === 'linkedin'
@@ -1503,7 +1524,7 @@
 		}
 		if (overBluesky.length && blueskySelected) {
 			advisories.push(
-				`${overBluesky[0].name} is over Bluesky's 1MB image cap. Compress it or uncheck Bluesky — Mastodon can still take it.`
+				`${overBluesky[0].name} is over Bluesky's 2MB image cap. Use a smaller image or uncheck Bluesky — Mastodon can still take it.`
 			);
 		}
 		if (overLinkedin.length && linkedinSelected) {
@@ -1516,7 +1537,7 @@
 		}
 		const threadsBadType =
 			threadsSelected && images.some((f) => f.type !== 'image/jpeg' && f.type !== 'image/png');
-		const threadsOversize = threadsSelected && images.some((f) => f.size > 8_000_000);
+		const threadsOversize = threadsSelected && images.some((f) => f.size > THREADS_MAX_IMAGE_BYTES);
 		if (threadsBadType) {
 			advisories.push('Threads takes JPEG/PNG images only — others stay on your other accounts.');
 		}

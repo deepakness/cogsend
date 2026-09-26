@@ -20,11 +20,11 @@ import type {
 	ValidationIssue
 } from './types';
 import { providerFetch } from './timed-fetch';
+import { THREADS_MAX_IMAGE_BYTES } from '$lib/domain/media-limits';
 
 export const THREADS_MAX_CHARS = 500;
 // Carousel children cap at 20 in the API; the apps allow 10 — match the apps.
 export const THREADS_MAX_IMAGES = 10;
-export const THREADS_MAX_IMAGE_BYTES = 8_000_000;
 const THREADS_IMAGE_MIMES = new Set(['image/jpeg', 'image/png']);
 export const THREADS_API_VERSION = 'v1.0';
 const REFRESH_SKEW_MS = 7 * 24 * 60 * 60 * 1000;
