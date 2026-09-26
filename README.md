@@ -29,6 +29,8 @@
 
 https://github.com/user-attachments/assets/4e1e623b-e862-4f70-8b48-b764590834f5
 
+<p align="center"><strong>Supported by <a href="https://zernio.com/?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=readme-sponsor">Zernio</a></strong>, which lets you connect X, Threads, LinkedIn and Bluesky <a href="docs/zernio.md">without your own developer apps</a>.</p>
+
 ## Why CogSend
 
 Hosted schedulers usually charge per channel and keep your posts and tokens on their servers. CogSend runs on your own Cloudflare account instead: your data stays in your own D1 database and R2 bucket, posts go out through your own API credentials, and there is no subscription to keep paying.
@@ -59,7 +61,7 @@ cd cogsend && npm install && npm run setup
 
 `setup` creates the Cloudflare resources, your admin account and the secrets, deploys, and prints your URL. Sign in there, scan the QR with an authenticator app and save the backup codes. It is safe to re-run; [docs/deploy.md](docs/deploy.md#one-command) lists every step and flag.
 
-Next, [connect your accounts](docs/accounts.md). Mastodon and Bluesky work straight away; LinkedIn, Threads and X need an [OAuth app](docs/oauth-apps.md) first.
+Next, [connect your accounts](docs/accounts.md). Mastodon and Bluesky work straight away; LinkedIn, Threads and X need an [OAuth app](docs/oauth-apps.md) first, or you can connect them through [Zernio](docs/zernio.md).
 
 ## Updating
 
@@ -77,6 +79,7 @@ Also published, with search, at [cogsend.com/docs](https://cogsend.com/docs/).
 
 - [Deploying](docs/deploy.md): the install and its flags, checking it worked, updating and rolling back
 - [OAuth apps](docs/oauth-apps.md): LinkedIn, Threads and X app setup, and what each platform allows
+- [Zernio](docs/zernio.md): connecting through Zernio instead of registering your own apps
 - [Connecting accounts](docs/accounts.md): connecting, reconnecting and disconnecting accounts
 
 **Use it**

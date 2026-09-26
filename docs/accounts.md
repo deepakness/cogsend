@@ -24,6 +24,9 @@ instead of a connect attempt that cannot succeed. The full steps are in
 
 Once the secrets are on the Worker, reload the page and connect as usual.
 
+If you would rather not set up an app, you can connect these through
+[Zernio](zernio.md) instead.
+
 ## When an account needs reconnecting
 
 A token that stops working marks the account as needing a reconnect, both here and

@@ -64,9 +64,10 @@ push.
 The e2e suite keeps to itself: its D1/R2 state lives in `.wrangler/e2e-state`, so
 your `npm run dev` data is never touched, and it creates its own account there
 (`scripts/seed-local.mjs`, run by the Playwright config) rather than borrowing
-yours. If you have no `.dev.vars`, it seeds one from
-`tests/e2e/fixtures/dev.vars`; an existing file is used as-is, so put
-`SKIP_TOTP=1` in yours to match the path CI takes.
+yours. Its environment comes from `tests/e2e/fixtures/dev.vars`, passed to
+Wrangler with `--env-file`, so your `.dev.vars` is never read or changed and
+every machine runs the same configuration as CI. `npm run test:e2e:totp` passes
+a temporary copy without `SKIP_TOTP`.
 
 The suite is one serial journey, not independent tests: the first spec signs in
 and later ones rely on what it left behind. So `npx playwright test -g "<a later
