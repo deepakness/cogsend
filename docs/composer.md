@@ -31,8 +31,15 @@ limits for every platform are in [OAuth apps → Platforms](oauth-apps.md#platfo
 
 Each card takes up to four images. Every image has an alt-text field ("Describe
 this image…"); fill it in and it goes out with the image on platforms that
-support it. Size and format limits differ per platform — Bluesky takes 1 MB, X 5
+support it. Size and format limits differ per platform — Bluesky takes 2 MB, X 5
 MB, and LinkedIn rejects WebP — and are checked again when the post is published.
+
+An image over 2 MB is shrunk in your browser before it uploads, so a pasted
+screenshot fits every platform: it is scaled down to 2560 px on the long edge,
+kept as PNG when that is enough and re-encoded as JPEG when it is not. GIFs and
+animated WebP are left as they are, since shrinking them would drop the
+animation. If an attached image is still over a selected platform's limit,
+Publish and Schedule stop and say which platform to uncheck.
 
 A URL in a card shows the link preview it will produce, while you write.
 
