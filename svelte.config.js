@@ -14,6 +14,16 @@ const config = {
 			mode: 'auto',
 			directives: {
 				'default-src': ['self'],
+				// Server-rendered <img onload/onerror> gets Svelte's inline
+				// `this.__e=event`, which records a load that finishes before
+				// hydration so it can be replayed. Blocked, a cached image loads
+				// unseen and its handler never runs. The hash admits that one
+				// string and nothing else.
+				'script-src': [
+					'self',
+					'unsafe-hashes',
+					'sha256-7dQwUgLau1NFCCGjfn9FsYptB6ZtWxJin6VohGIu20I='
+				],
 				'base-uri': ['self'],
 				'object-src': ['none'],
 				'frame-ancestors': ['none'],

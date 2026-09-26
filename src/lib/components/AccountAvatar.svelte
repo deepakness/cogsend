@@ -51,6 +51,12 @@
 	const label = $derived(badgeLabel[platform] ?? platform);
 	let imgFailed = $state(false);
 	let imgLoaded = $state(false);
+	let img = $state<HTMLImageElement>();
+	// A cached image can finish before hydration, and then `onload` never runs
+	// here; without this it would stay at opacity 0 over the initials.
+	$effect(() => {
+		if (img?.complete && img.naturalWidth > 0) imgLoaded = true;
+	});
 </script>
 
 <span
@@ -68,6 +74,7 @@
 	</span>
 	{#if avatarUrl && !imgFailed}
 		<img
+			bind:this={img}
 			src={avatarUrl}
 			alt=""
 			width={size}
