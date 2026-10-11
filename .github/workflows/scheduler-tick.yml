@@ -20,6 +20,9 @@ concurrency:
 
 jobs:
   tick:
+    # The upstream repository serves no instance, so it never ticks; a fork
+    # (or a copy under another name) runs as described above.
+    if: github.repository != 'cogsend/cogsend'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
